@@ -3,6 +3,7 @@ Image API routes
 """
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, HttpUrl
 from io import BytesIO
 from datetime import datetime
 import uuid
@@ -11,9 +12,14 @@ from rate_limiter import limiter
 router = APIRouter()
 
 
+class ImageRequest(BaseModel):
+    image_url: HttpUrl
+    prompt: str
+
+
 @router.post("/validate-image-quality/")
 @limiter.limit("30/minute")
-async def validate_image_quality_endpoint(request: Request, body):
+async def validate_image_quality_endpoint(request: Request, body: ImageRequest):
     """
     Standalone endpoint to validate image quality without editing.
     Useful for pre-validation before processing.
@@ -45,7 +51,7 @@ async def validate_image_quality_endpoint(request: Request, body):
 
 @router.post("/edit-image/")
 @limiter.limit("20/minute")
-async def edit_image_endpoint(request: Request, body):
+async def edit_image_endpoint(request: Request, body: ImageRequest):
     import main  # Import here to avoid circular import
     try:
         # Convert HttpUrl to string for processing
@@ -106,7 +112,7 @@ async def edit_image_endpoint(request: Request, body):
 
 @router.post("/edit-image-stream/")
 @limiter.limit("20/minute")
-async def edit_image_stream_endpoint(request: Request, body):
+async def edit_image_stream_endpoint(request: Request, body: ImageRequest):
     """Alternative endpoint that returns the image as a stream (for direct download)"""
     import main  # Import here to avoid circular import
     try:
