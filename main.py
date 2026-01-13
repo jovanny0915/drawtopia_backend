@@ -1546,6 +1546,121 @@ class CustomerPortalResponse(BaseModel):
     message: Optional[str] = None
 
 
+@app.post("/api/stripe/create-onetime-checkout", response_model=SubscriptionResponse)
+async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
+    """
+    Create a Stripe checkout session for one-time purchases (single story or story bundle).
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    
+    try:
+        # Determine price ID based on purchase type
+        if request.purchase_type == "single_story":
+            price_id = STRIPE_PRICE_ID_SINGLE_STORY
+        elif request.purchase_type == "story_bundle":
+            price_id = STRIPE_PRICE_ID_STORY_BUNDLE
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid purchase_type: {request.purchase_type}")
+        
+        if not price_id:
+            raise HTTPException(status_code=503, detail=f"Price ID not configured for {request.purchase_type}")
+        
+        # Create checkout session
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price": price_id,
+                    "quantity": 1,
+                }
+            ],
+            mode="payment",
+            success_url=request.success_url or f"{FRONTEND_URL}/purchase/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=request.cancel_url or f"{FRONTEND_URL}/pricing",
+            customer_email=request.user_email,
+            metadata={
+                "user_id": request.user_id or "unknown",
+                "purchase_type": request.purchase_type,
+                "story_id": request.story_id or "none"
+            }
+        )
+        
+        logger.info(f"Created one-time checkout session {checkout_session.id} for {request.purchase_type}")
+        
+        return SubscriptionResponse(
+            success=True,
+            checkout_url=checkout_session.url,
+            session_id=checkout_session.id
+        )
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating one-time checkout: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error creating one-time checkout: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create checkout session: {str(e)}")
+
+
+@app.post("/api/stripe/create-subscription-checkout", response_model=SubscriptionResponse)
+async def create_subscription_checkout(request: CreateSubscriptionRequest):
+    """
+    Create a Stripe checkout session for subscription plans (monthly or yearly).
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    
+    try:
+        # Determine price ID based on subscription type
+        if request.price_type == "monthly":
+            price_id = STRIPE_PRICE_ID_MONTHLY
+        elif request.price_type == "yearly":
+            price_id = STRIPE_PRICE_ID_YEARLY
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid price_type: {request.price_type}")
+        
+        if not price_id:
+            raise HTTPException(status_code=503, detail=f"Price ID not configured for {request.price_type} subscription")
+        
+        # Create checkout session for subscription
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price": price_id,
+                    "quantity": 1,
+                }
+            ],
+            mode="subscription",
+            success_url=request.success_url or f"{FRONTEND_URL}/purchase/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=request.cancel_url or f"{FRONTEND_URL}/pricing",
+            customer_email=request.user_email,
+            metadata={
+                "user_id": request.user_id or "unknown",
+                "price_type": request.price_type
+            }
+        )
+        
+        logger.info(f"Created subscription checkout session {checkout_session.id} for {request.price_type} plan")
+        
+        return SubscriptionResponse(
+            success=True,
+            checkout_url=checkout_session.url,
+            session_id=checkout_session.id
+        )
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating subscription checkout: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error creating subscription checkout: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create checkout session: {str(e)}")
+
+
 @app.post("/api/stripe/create-customer-portal", response_model=CustomerPortalResponse)
 async def create_customer_portal(user_id: str, return_url: Optional[str] = None):
     """
