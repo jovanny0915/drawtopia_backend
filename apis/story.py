@@ -5,15 +5,19 @@ from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import uuid
 import requests
 import time
-from pydantic import HttpUrl
+from pydantic import HttpUrl, BaseModel
 from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
+from .models import StoryRequest
+
+if TYPE_CHECKING:
+    import main
 
 router = APIRouter()
 
@@ -325,7 +329,7 @@ async def delete_book(request: Request, id: str):
 
 @router.post("/generate-story/")
 @limiter.limit("10/minute")
-async def generate_story_endpoint(request: Request, body: "main.StoryRequest"):
+async def generate_story_endpoint(request: Request, body: StoryRequest):
     """Generate a 5-page children's story based on the provided parameters"""
     import main  # Import here to avoid circular import
     try:
