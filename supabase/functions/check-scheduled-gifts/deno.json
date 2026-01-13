@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "start": "deno run --allow-all index.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window"]
+  }
+}
+
