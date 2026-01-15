@@ -1821,7 +1821,7 @@ async def handle_checkout_completed(session):
                 "stripe_subscription_id": subscription_id,
                 "customer_email": customer_email,
                 "status": subscription.status,
-                "plan_type": price_type,
+                "plan_type": "dddddddd", # price_type,
                 "current_period_start": datetime.utcnow().isoformat() + "Z",
                 "current_period_end": datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
                 "created_at": datetime.utcnow().isoformat()
