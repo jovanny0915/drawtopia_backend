@@ -1813,8 +1813,22 @@ async def handle_checkout_completed(session):
 
         print('[handle_checkout_completed] subscription:', user_id, customer_id, subscription_id, customer_email, price_type);
         
+        # Get subscription expiration from Stripe
+        subscription_expires = None
+        current_period_end = subscription.get("current_period_end")
+        if current_period_end:
+            subscription_expires = datetime.fromtimestamp(current_period_end).isoformat() + "Z"
+        
         # Save to database
         if supabase:
+            # Use actual dates from Stripe subscription
+            current_period_start_iso = None
+            current_period_end_iso = None
+            if subscription.get("current_period_start"):
+                current_period_start_iso = datetime.fromtimestamp(subscription.get("current_period_start")).isoformat() + "Z"
+            if subscription.get("current_period_end"):
+                current_period_end_iso = datetime.fromtimestamp(subscription.get("current_period_end")).isoformat() + "Z"
+            
             subscription_data = {
                 "user_id": user_id if user_id else None,
                 "stripe_customer_id": customer_id,
@@ -1822,8 +1836,8 @@ async def handle_checkout_completed(session):
                 "customer_email": customer_email,
                 "status": subscription.status,
                 "plan_type": "dddddddd", # price_type,
-                "current_period_start": datetime.utcnow().isoformat() + "Z",
-                "current_period_end": datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
+                "current_period_start": current_period_start_iso or datetime.utcnow().isoformat() + "Z",
+                "current_period_end": current_period_end_iso or datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
                 "created_at": datetime.utcnow().isoformat()
             }
             
@@ -1835,21 +1849,40 @@ async def handle_checkout_completed(session):
             
             logger.info(f"Saved subscription {subscription_id} to database")
             
-            # Update users table to set subscription_status to "premium" if subscription is active or trialing
-            if user_id and subscription.status in ["active", "trialing"]:
+            # Always update stripe_customer_id in users table
+            # Find user by user_id if available, otherwise by email
+            target_user_id = None
+            if user_id:
+                target_user_id = user_id
+            elif customer_email:
                 try:
-                    subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z"
+                    user_result = supabase.table("users").select("id").eq("email", customer_email).execute()
+                    if user_result.data and len(user_result.data) > 0:
+                        target_user_id = user_result.data[0].get("id")
+                except Exception as e:
+                    logger.warning(f"Could not find user by email {customer_email}: {e}")
+            
+            if target_user_id and customer_id:
+                try:
+                    # Determine subscription status
+                    subscription_status = "premium" if subscription.status in ["active", "trialing"] else subscription.status
                     
                     user_update_data = {
-                        "subscription_status": "premium",
-                        "subscription_expires": subscription_expires,
                         "stripe_customer_id": customer_id
                     }
                     
-                    supabase.table("users").update(user_update_data).eq("id", user_id).execute()
-                    logger.info(f"Updated user {user_id} with premium subscription status from checkout completed")
+                    # Update subscription_status and subscription_expires if subscription is active or trialing
+                    if subscription.status in ["active", "trialing"]:
+                        user_update_data["subscription_status"] = subscription_status
+                        if subscription_expires:
+                            user_update_data["subscription_expires"] = subscription_expires
+                    
+                    supabase.table("users").update(user_update_data).eq("id", target_user_id).execute()
+                    logger.info(f"Updated user {target_user_id} with stripe_customer_id={customer_id} and subscription_status={subscription_status} from checkout completed")
                 except Exception as e:
-                    logger.error(f"Error updating user subscription status in checkout completed: {e}")
+                    logger.error(f"Error updating user stripe_customer_id in checkout completed: {e}")
+            elif customer_id:
+                logger.warning(f"Could not update stripe_customer_id: user_id={user_id}, customer_email={customer_email}, customer_id={customer_id}")
             
     except Exception as e:
         logger.error(f"Error handling checkout completed: {e}")
@@ -2046,23 +2079,29 @@ async def handle_payment_succeeded(invoice):
             # Get subscription details from Stripe
             plan_type = "monthly"
             next_billing_date = None
+            subscription_status = None
+            subscription_expires = None
             try:
                 stripe_subscription = stripe.Subscription.retrieve(subscription_id)
-                subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z"
+                
+                # Get subscription status from Stripe
+                subscription_status = stripe_subscription.get("status")
+                
+                # Get subscription expiration from current_period_end
+                current_period_end = stripe_subscription.get("current_period_end")
+                if current_period_end:
+                    subscription_expires = datetime.fromtimestamp(current_period_end).isoformat() + "Z"
+                    next_billing_date = datetime.fromtimestamp(current_period_end).strftime("%B %d, %Y")
                 
                 # Determine plan type from price interval
                 if stripe_subscription.get("items", {}).get("data"):
                     price = stripe_subscription["items"]["data"][0].get("price", {})
                     interval = price.get("recurring", {}).get("interval", "month")
                     plan_type = "yearly" if interval == "year" else "monthly"
-                
-                # Get next billing date
-                current_period_end = stripe_subscription.get("current_period_end")
-                if current_period_end:
-                    next_billing_date = datetime.fromtimestamp(current_period_end).strftime("%B %d, %Y")
             except Exception as e:
                 logger.warning(f"Could not retrieve subscription details: {e}")
                 subscription_expires = None
+                subscription_status = None
             
             if supabase:
                 # Get customer email from subscription if not in invoice
@@ -2074,13 +2113,17 @@ async def handle_payment_succeeded(invoice):
                     except Exception:
                         pass
                 
-                supabase.table("subscriptions").update({
-                    "status": "active",
+                # Update subscription status in subscriptions table
+                subscription_update_data = {
                     "last_payment_date": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow().isoformat()
-                }).eq("stripe_subscription_id", subscription_id).execute()
+                }
+                if subscription_status:
+                    subscription_update_data["status"] = subscription_status
                 
-                # Update users table with active status on successful payment
+                supabase.table("subscriptions").update(subscription_update_data).eq("stripe_subscription_id", subscription_id).execute()
+                
+                # Update users table with subscription status and expiration from Stripe response
                 if customer_id:
                     user_result = supabase.table("users").select("id, email").eq("stripe_customer_id", customer_id).execute()
                     
@@ -2092,14 +2135,58 @@ async def handle_payment_succeeded(invoice):
                         if not customer_email:
                             customer_email = user_data.get("email")
                         
-                        # Set subscription_status to "premium" when payment succeeds
-                        user_update_data = {
-                            "subscription_status": "premium",
-                            "subscription_expires": subscription_expires
-                        }
+                        # Update user table with subscription status and expiration from Stripe
+                        user_update_data = {}
                         
-                        supabase.table("users").update(user_update_data).eq("id", user_id).execute()
-                        logger.info(f"Updated user {user_id} with premium subscription on payment success")
+                        # Update stripe_customer_id if not already set
+                        user_update_data["stripe_customer_id"] = customer_id
+                        
+                        # Update subscription_status based on Stripe subscription status
+                        if subscription_status:
+                            # Map Stripe status to our status
+                            if subscription_status in ["active", "trialing"]:
+                                user_update_data["subscription_status"] = "premium"
+                            elif subscription_status in ["past_due", "unpaid", "canceled", "incomplete", "incomplete_expired"]:
+                                user_update_data["subscription_status"] = subscription_status
+                            else:
+                                user_update_data["subscription_status"] = subscription_status
+                        
+                        # Update subscription_expires from Stripe response
+                        if subscription_expires:
+                            user_update_data["subscription_expires"] = subscription_expires
+                        elif subscription_status in ["canceled", "incomplete_expired"]:
+                            # Clear expiration if subscription is canceled
+                            user_update_data["subscription_expires"] = None
+                        
+                        if user_update_data:
+                            supabase.table("users").update(user_update_data).eq("id", user_id).execute()
+                            logger.info(f"Updated user {user_id} with subscription_status={user_update_data.get('subscription_status')} and subscription_expires={user_update_data.get('subscription_expires')} from payment succeeded")
+                    else:
+                        # Try to find user by email if not found by stripe_customer_id
+                        if customer_email:
+                            try:
+                                user_result = supabase.table("users").select("id, email").eq("email", customer_email).execute()
+                                if user_result.data and len(user_result.data) > 0:
+                                    user_data = user_result.data[0]
+                                    user_id = user_data.get("id")
+                                    
+                                    user_update_data = {
+                                        "stripe_customer_id": customer_id
+                                    }
+                                    
+                                    if subscription_status:
+                                        if subscription_status in ["active", "trialing"]:
+                                            user_update_data["subscription_status"] = "premium"
+                                        else:
+                                            user_update_data["subscription_status"] = subscription_status
+                                    
+                                    if subscription_expires:
+                                        user_update_data["subscription_expires"] = subscription_expires
+                                    
+                                    supabase.table("users").update(user_update_data).eq("id", user_id).execute()
+                                    logger.info(f"Updated user {user_id} (found by email) with stripe_customer_id and subscription info from payment succeeded")
+                            except Exception as e:
+                                logger.warning(f"Could not find user by email to update stripe_customer_id: {e}")
             
             # Send payment success email
             logger.info(f"Attempting to send payment success email - Email: {customer_email}, Service enabled: {email_service.is_enabled()}")
