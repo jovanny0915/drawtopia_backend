@@ -1835,6 +1835,22 @@ async def handle_checkout_completed(session):
             
             logger.info(f"Saved subscription {subscription_id} to database")
             
+            # Update users table to set subscription_status to "premium" if subscription is active or trialing
+            if user_id and subscription.status in ["active", "trialing"]:
+                try:
+                    subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z"
+                    
+                    user_update_data = {
+                        "subscription_status": "premium",
+                        "subscription_expires": subscription_expires,
+                        "stripe_customer_id": customer_id
+                    }
+                    
+                    supabase.table("users").update(user_update_data).eq("id", user_id).execute()
+                    logger.info(f"Updated user {user_id} with premium subscription status from checkout completed")
+                except Exception as e:
+                    logger.error(f"Error updating user subscription status in checkout completed: {e}")
+            
     except Exception as e:
         logger.error(f"Error handling checkout completed: {e}")
 
@@ -1881,7 +1897,7 @@ async def handle_subscription_created(subscription):
                 }
                 
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
-                logger.info(f"Updated user {user_id} with subscription info from subscription created event")
+                logger.info(f"Updated user {user_id} with subscription info from subscription created event (status: {user_subscription_status})")
                 
     except Exception as e:
         logger.error(f"Error handling subscription created: {e}")
@@ -1912,7 +1928,7 @@ async def handle_subscription_updated(subscription):
             
             if user_result.data and len(user_result.data) > 0:
                 user_id = user_result.data[0].get("id")
-                subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z"
+                subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
                 
                 # Set subscription_status to "premium" if subscription is active or trialing
                 user_subscription_status = "premium" if status in ["active", "trialing"] else status
@@ -1923,7 +1939,7 @@ async def handle_subscription_updated(subscription):
                 }
                 
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
-                logger.info(f"Updated user {user_id} with subscription info from subscription updated event")
+                logger.info(f"Updated user {user_id} with subscription info from subscription updated event (status: {user_subscription_status})")
             
     except Exception as e:
         logger.error(f"Error handling subscription updated: {e}")
@@ -2076,6 +2092,7 @@ async def handle_payment_succeeded(invoice):
                         if not customer_email:
                             customer_email = user_data.get("email")
                         
+                        # Set subscription_status to "premium" when payment succeeds
                         user_update_data = {
                             "subscription_status": "premium",
                             "subscription_expires": subscription_expires
