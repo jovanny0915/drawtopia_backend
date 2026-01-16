@@ -30,6 +30,17 @@ class CompareSimilarityResponse(BaseModel):
     message: str
 
 
+class SearchGameHintRequest(BaseModel):
+    env_img: HttpUrl
+    character_img: HttpUrl
+
+
+class SearchGameHintResponse(BaseModel):
+    success: bool
+    hint_text: str
+    message: str
+
+
 @router.post("/validate-image-quality/")
 @limiter.limit("30/minute")
 async def validate_image_quality_endpoint(request: Request, body: ImageRequest):
@@ -283,4 +294,107 @@ Respond with ONLY a number between 0 and 10 (including decimals like 7.5), and o
         raise e
     except Exception as e:
         main.logger.error(f"Unexpected error in compare_similarity_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post("/search-game-hint/")
+@limiter.limit("30/minute")
+async def search_game_hint_endpoint(request: Request, body: SearchGameHintRequest):
+    """
+    Generate a hint describing where the character image is located in the environment image.
+    Uses Gemini API (text model) to analyze both images and provide a descriptive hint.
+    """
+    import main  # Import here to avoid circular import
+    
+    if not main.gemini_client:
+        raise HTTPException(status_code=500, detail="Gemini client not initialized. Please check GEMINI_API_KEY.")
+    
+    try:
+        # Convert HttpUrl to string for processing
+        env_img_url = str(body.env_img)
+        character_img_url = str(body.character_img)
+        
+        # Download both images
+        main.logger.info(f"Downloading environment image from: {env_img_url}")
+        env_image_data = main.download_image_from_url(env_img_url)
+        
+        main.logger.info(f"Downloading character image from: {character_img_url}")
+        character_image_data = main.download_image_from_url(character_img_url)
+        
+        # Detect MIME types
+        env_mime_type = main.detect_image_mime_type(env_image_data)
+        character_mime_type = main.detect_image_mime_type(character_image_data)
+        
+        # Encode images to base64
+        env_image_base64 = base64.b64encode(env_image_data).decode('utf-8')
+        character_image_base64 = base64.b64encode(character_image_data).decode('utf-8')
+        
+        # Prepare prompt for hint generation
+        hint_prompt = """Look at these two images. The first image is an environment scene, and the second image is a character.
+
+Your task is to describe where the character (from the second image) is located in the environment scene (first image). 
+
+Provide a clear, helpful hint that describes the location of the character in the environment. Be specific about:
+- The area or region of the scene (e.g., "top left", "center", "bottom right")
+- Nearby objects or landmarks that can help locate the character
+- Any distinctive features or colors in that area
+
+Keep the hint concise (1-2 sentences) and child-friendly. Do not reveal the exact position, but give enough information to guide the search.
+
+Example format: "Look in the upper right area near the colorful flowers" or "Check the bottom left corner where the trees are"."""
+        
+        # Send request to Gemini API with both images using text model (not pro)
+        main.logger.info("Sending images to Gemini API for hint generation...")
+        response = main.gemini_client.models.generate_content(
+            model=main.GEMINI_TEXT_MODEL,  # Use text model (gemini-2.5-flash), not pro
+            contents=[
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": hint_prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": env_mime_type,
+                                "data": env_image_base64
+                            }
+                        },
+                        {
+                            "inline_data": {
+                                "mime_type": character_mime_type,
+                                "data": character_image_base64
+                            }
+                        }
+                    ]
+                }
+            ],
+            config=main.types.GenerateContentConfig(
+                response_modalities=['TEXT']
+            )
+        )
+        
+        # Extract text response
+        hint_text = ""
+        for part in response.parts:
+            if part.text:
+                hint_text += part.text
+        
+        # Clean up the hint text (remove extra whitespace)
+        hint_text = hint_text.strip()
+        
+        main.logger.info(f"Generated hint text: {hint_text}")
+        
+        if not hint_text:
+            raise HTTPException(status_code=500, detail="Failed to generate hint text from Gemini API")
+        
+        return SearchGameHintResponse(
+            success=True,
+            hint_text=hint_text,
+            message="Hint generated successfully"
+        )
+        
+    except HTTPException as e:
+        main.logger.error(f"HTTP Exception: {e.detail}")
+        raise e
+    except Exception as e:
+        main.logger.error(f"Unexpected error in search_game_hint_endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")

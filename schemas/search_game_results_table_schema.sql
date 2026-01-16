@@ -1,18 +1,23 @@
 -- Search Game Results Table Schema
 -- This table stores search game results for interactive search stories
 -- Run this SQL in your Supabase SQL Editor
+-- 
+-- Prerequisites: 
+-- - characters table should exist (if using character_id)
+-- - stories table should exist (if using story_id)
+-- - child_profiles table should exist (if using child_profile_id)
 
--- Create search_game_results table
+-- Create search_game_results table (without foreign keys first)
 CREATE TABLE IF NOT EXISTS search_game_results (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
-    -- Character relationship
-    character_id BIGINT REFERENCES characters(id) ON DELETE CASCADE,
+    -- Character relationship (foreign key added separately if table exists)
+    character_id BIGINT,
     
-    -- Story relationship (optional, for reference)
-    story_id BIGINT REFERENCES stories(id) ON DELETE SET NULL,
+    -- Story relationship (optional, foreign key added separately if table exists)
+    story_id BIGINT,
     
     -- Result data (JSON array of scene results)
     result JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -34,9 +39,65 @@ CREATE TABLE IF NOT EXISTS search_game_results (
     best_scene VARCHAR(255), -- Best scene title (scene with highest stars)
     
     -- Additional metadata
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-    child_profile_id BIGINT REFERENCES child_profiles(id) ON DELETE SET NULL
+    user_id UUID, -- Foreign key to auth.users(id) added separately
+    child_profile_id BIGINT -- Foreign key to child_profiles(id) added separately
 );
+
+-- Add foreign key constraints only if the referenced tables exist
+-- Note: These will fail silently if tables don't exist, which is fine
+-- You can add them later once the referenced tables are created
+
+-- Add foreign key for character_id if characters table exists
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'characters') THEN
+        ALTER TABLE search_game_results 
+        ADD CONSTRAINT fk_search_game_results_character_id 
+        FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Could not add foreign key for character_id: %', SQLERRM;
+END $$;
+
+-- Add foreign key for story_id if stories table exists
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stories') THEN
+        ALTER TABLE search_game_results 
+        ADD CONSTRAINT fk_search_game_results_story_id 
+        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE SET NULL;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Could not add foreign key for story_id: %', SQLERRM;
+END $$;
+
+-- Add foreign key for user_id if auth.users exists (should always exist in Supabase)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'auth' AND table_name = 'users') THEN
+        ALTER TABLE search_game_results 
+        ADD CONSTRAINT fk_search_game_results_user_id 
+        FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Could not add foreign key for user_id: %', SQLERRM;
+END $$;
+
+-- Add foreign key for child_profile_id if child_profiles table exists
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'child_profiles') THEN
+        ALTER TABLE search_game_results 
+        ADD CONSTRAINT fk_search_game_results_child_profile_id 
+        FOREIGN KEY (child_profile_id) REFERENCES child_profiles(id) ON DELETE SET NULL;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Could not add foreign key for child_profile_id: %', SQLERRM;
+END $$;
 
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_search_game_results_character_id ON search_game_results(character_id);
