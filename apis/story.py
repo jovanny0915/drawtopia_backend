@@ -989,6 +989,33 @@ async def save_search_game_results(request: Request, body: SearchGameResultReque
         
         if response.data:
             main.logger.info(f"Search game results saved for character {body.character_id}")
+            
+            # Update hints count in stories table if story_id is provided
+            if body.story_id and body.hints_used > 0:
+                try:
+                    # Get current hints count
+                    story_response = main.supabase.table("stories").select("hints").eq("id", body.story_id).execute()
+                    
+                    if story_response.data and len(story_response.data) > 0:
+                        current_hints = story_response.data[0].get("hints", 3)
+                        if current_hints is not None:
+                            # Decrement hints by the number used, but don't go below 0
+                            new_hints = max(0, current_hints - body.hints_used)
+                            
+                            # Update stories table
+                            update_response = main.supabase.table("stories").update({
+                                "hints": new_hints
+                            }).eq("id", body.story_id).execute()
+                            
+                            main.logger.info(f"Updated hints count for story {body.story_id}: {current_hints} -> {new_hints} (used {body.hints_used})")
+                        else:
+                            main.logger.warning(f"Story {body.story_id} has NULL hints, skipping update")
+                    else:
+                        main.logger.warning(f"Story {body.story_id} not found, skipping hints update")
+                except Exception as e:
+                    # Don't fail the entire operation if hints update fails
+                    main.logger.error(f"Error updating hints count for story {body.story_id}: {e}")
+            
             return {
                 "success": True,
                 "message": "Search game results saved successfully",
