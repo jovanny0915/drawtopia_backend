@@ -20,8 +20,8 @@ class ImageRequest(BaseModel):
 
 
 class CompareSimilarityRequest(BaseModel):
-    image_url1: HttpUrl
-    image_url2: HttpUrl
+    image1_url: HttpUrl
+    image2_url: HttpUrl
 
 
 class CompareSimilarityResponse(BaseModel):
@@ -171,8 +171,8 @@ async def compare_similarity_endpoint(request: Request, body: CompareSimilarityR
     
     try:
         # Convert HttpUrl to string for processing
-        image_url1_str = str(body.image_url1)
-        image_url2_str = str(body.image_url2)
+        image_url1_str = str(body.image1_url)
+        image_url2_str = str(body.image2_url)
         
         # Download both images
         main.logger.info(f"Downloading first image from: {image_url1_str}")
