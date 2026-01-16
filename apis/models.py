@@ -2,7 +2,7 @@
 Pydantic models for API requests/responses
 """
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 
 class StoryRequest(BaseModel):
@@ -40,5 +40,57 @@ class StoryRequest(BaseModel):
                 "scene_prompts": ["Scene prompt for page 1...", "Scene prompt for page 2...", ],
                 "reading_level": "developing_reader",
                 "story_title": "The Great Adventure of Luna"
+            }
+        }
+
+
+class SceneResult(BaseModel):
+    """Individual scene result within search game results"""
+    scene_index: int
+    scene_title: str
+    time: str  # Format: "M:SS" or seconds as string
+    hint_used: int
+    star_rate: int  # 0-3 stars
+
+
+class SearchGameResultRequest(BaseModel):
+    """Request model for saving search game results"""
+    character_id: int
+    story_id: Optional[int] = None
+    result: List[SceneResult]  # Array of scene results
+    total_time: int  # Total time in seconds
+    avg_stars: float  # Average stars (0.00 to 3.00)
+    hints_used: int  # Total hints used
+    best_scene: str  # Best scene title
+    user_id: Optional[str] = None
+    child_profile_id: Optional[int] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "character_id": 1,
+                "story_id": 123,
+                "result": [
+                    {
+                        "scene_index": 0,
+                        "scene_title": "The Magical Forest",
+                        "time": "2:30",
+                        "hint_used": 1,
+                        "star_rate": 3
+                    },
+                    {
+                        "scene_index": 1,
+                        "scene_title": "The Enchanted Castle",
+                        "time": "3:15",
+                        "hint_used": 2,
+                        "star_rate": 2
+                    }
+                ],
+                "total_time": 345,
+                "avg_stars": 2.5,
+                "hints_used": 3,
+                "best_scene": "The Magical Forest",
+                "user_id": "user-uuid-here",
+                "child_profile_id": 1
             }
         }

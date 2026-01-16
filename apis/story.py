@@ -14,7 +14,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest
+from .models import StoryRequest, SearchGameResultRequest
 
 if TYPE_CHECKING:
     import main
@@ -941,3 +941,66 @@ async def record_book_purchase(
     except Exception as e:
         main.logger.error(f"Error recording purchase: {e}")
         raise HTTPException(status_code=500, detail=f"Error recording purchase: {str(e)}")
+
+
+@router.post("/api/search-game-results")
+@limiter.limit("20/minute")
+async def save_search_game_results(request: Request, body: SearchGameResultRequest):
+    """
+    Save search game results for an interactive search story
+    
+    This endpoint stores the results of a completed search game, including
+    scene-by-scene results and summary statistics.
+    """
+    import main  # Import here to avoid circular import
+    try:
+        if not main.supabase:
+            raise HTTPException(status_code=500, detail="Database service not available")
+        
+        if not body.character_id:
+            raise HTTPException(status_code=400, detail="character_id is required")
+        
+        # Convert scene results to JSON format for storage
+        result_array = []
+        for scene_result in body.result:
+            result_array.append({
+                "scene_index": scene_result.scene_index,
+                "scene_title": scene_result.scene_title,
+                "time": scene_result.time,
+                "hint_used": scene_result.hint_used,
+                "star_rate": scene_result.star_rate
+            })
+        
+        # Prepare data for insertion
+        result_data = {
+            "character_id": body.character_id,
+            "story_id": body.story_id,
+            "result": result_array,  # This will be stored as JSONB
+            "total_time": body.total_time,
+            "avg_stars": float(body.avg_stars),
+            "hints_used": body.hints_used,
+            "best_scene": body.best_scene,
+            "user_id": body.user_id,
+            "child_profile_id": body.child_profile_id
+        }
+        
+        # Insert into database
+        response = main.supabase.table("search_game_results").insert(result_data).execute()
+        
+        if response.data:
+            main.logger.info(f"Search game results saved for character {body.character_id}")
+            return {
+                "success": True,
+                "message": "Search game results saved successfully",
+                "result_id": response.data[0]["id"]
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save search game results")
+            
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Error saving search game results: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error saving search game results: {str(e)}")
