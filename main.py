@@ -943,8 +943,22 @@ def generate_story_scene_image(story_page_text: str, page_number: int, character
         
         # Use provided prompt if available, otherwise generate one (for backward compatibility)
         if scene_prompt:
-            prompt = scene_prompt
-            logger.info(f"Using scene prompt from frontend for page {page_number}")
+            # Enhance custom prompt with explicit text requirement
+            text_requirement = f"""
+
+CRITICAL TEXT REQUIREMENT:
+- The EXACT story page text below MUST be visibly embedded and displayed within the image:
+"{story_page_text}"
+- The text should be clearly readable, using a child-friendly font style
+- Place the text in a prominent location (typically at the bottom or top of the image, or integrated naturally into the scene)
+- Use contrasting colors for text readability (e.g., white text on dark backgrounds, dark text on light backgrounds)
+- The text should be large enough to be easily read by children
+- Integrate the text naturally into the illustration style, making it look like part of a storybook page
+- DO NOT omit or modify any part of the story text - include it exactly as provided above
+- TEXT VISIBILITY: Ensure the story text is clearly visible and readable, with proper contrast against the background
+"""
+            prompt = scene_prompt + text_requirement
+            logger.info(f"Using scene prompt from frontend for page {page_number} (enhanced with text requirement)")
         else:
             # Fallback: generate prompt from parameters (for backward compatibility)
             character_reference_note = ""
@@ -1008,9 +1022,17 @@ DO NOT:
             
             prompt = f"""Create a beautiful, colorful children's storybook illustration for this story page.
 
-STORY PAGE TEXT (Page {page_number}):
+STORY PAGE TEXT (Page {page_number}) - MUST BE INSERTED INTO IMAGE:
 {story_page_text}
-- Embed this story page text into the image naturally.
+
+CRITICAL TEXT REQUIREMENT:
+- The EXACT story page text above MUST be visibly embedded and displayed within the image
+- The text should be clearly readable, using a child-friendly font style
+- Place the text in a prominent location (typically at the bottom or top of the image, or integrated naturally into the scene)
+- Use contrasting colors for text readability (e.g., white text on dark backgrounds, dark text on light backgrounds)
+- The text should be large enough to be easily read by children
+- Integrate the text naturally into the illustration style, making it look like part of a storybook page
+- DO NOT omit or modify any part of the story text - include it exactly as provided above
 
 CHARACTER INFORMATION:
 - Character Name: {character_name}
@@ -1031,9 +1053,10 @@ ILLUSTRATION REQUIREMENTS:
 9. Style should be like a professional children's book illustration
 10. IMPORTANT: The image must be in 768x512 dimensions
 {"11. CRITICAL: The character must match the appearance shown in the reference image provided" if reference_image_url and base_image_data else ""}
+12. TEXT VISIBILITY: Ensure the story text is clearly visible and readable, with proper contrast against the background
 {negative_prompts}
 
-Generate a high-quality illustration that perfectly captures this story moment in 768x512 dimensions."""
+Generate a high-quality illustration that perfectly captures this story moment in 768x512 dimensions, with the story text clearly visible and integrated into the image."""
 
         # Use edit_image function to generate the scene
         logger.info(f"Calling edit_image function with prompt for page {page_number}")
