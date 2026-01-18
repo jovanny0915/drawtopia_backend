@@ -379,12 +379,17 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
         if body.dedication_text and body.dedication_scene_prompt:
             main.logger.info("Generating dedication page image...")
             try:
+                # Get reference character image URL if available
+                dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
+                if dedication_reference_image_url:
+                    main.logger.info(f"Using character reference image for dedication page: {dedication_reference_image_url}")
+                
                 # Create blank base image for dedication (typically portrait format for dedication pages)
                 dedication_base_image = main.create_blank_base_image(width=768, height=1024)  # Portrait format
                 
-                # Use edit_image function to generate the dedication image
+                # Use edit_image function to generate the dedication image with character reference
                 main.logger.info("Calling edit_image function for dedication page...")
-                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, None)
+                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
                 
                 # Optimize image to JPG format
                 main.logger.info("Optimizing dedication image to JPG format...")

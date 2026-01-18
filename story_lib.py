@@ -539,21 +539,19 @@ CRITICAL REQUIREMENTS:
 7. Educational value appropriate to age
 8. Gender-neutral language unless character gender specified
 
-Format the output as:
-PAGE 1:
-[content]
+Format the output as 5 separate pages of story text, separated by blank lines. DO NOT include page titles like "PAGE 1:", "PAGE 2:", etc. Just provide the story text for each page directly:
 
-PAGE 2:
-[content]
+[Page 1 story text content]
 
-PAGE 3:
-[content]
+[Page 2 story text content]
 
-PAGE 4:
-[content]
+[Page 3 story text content]
 
-PAGE 5:
-[content]
+[Page 4 story text content]
+
+[Page 5 story text content]
+
+IMPORTANT: Only include the story text itself - no titles, no page numbers, no labels. Just the narrative content for each page separated by blank lines.
 """
     
     response = client.chat.completions.create(
@@ -569,17 +567,35 @@ PAGE 5:
     story_text = response.choices[0].message.content.strip()
     
     # Parse the response into pages
+    # First, try to remove any "PAGE X:" labels if they exist (for backward compatibility)
+    story_text = re.sub(r'PAGE \d+:\s*', '', story_text, flags=re.IGNORECASE)
+    
+    # Split by double newlines (blank lines) to separate pages
+    pages_raw = [p.strip() for p in story_text.split('\n\n') if p.strip()]
+    
     pages = []
-    for i in range(1, 6):
-        page_match = re.search(rf'PAGE {i}:\s*(.*?)(?=PAGE {i+1}:|$)', story_text, re.DOTALL)
-        if page_match:
-            pages.append(page_match.group(1).strip() + " ")
+    # If we got 5 pages, use them directly
+    if len(pages_raw) == 5:
+        pages = [page + " " for page in pages_raw]
+    # If we got more than 5, take first 5
+    elif len(pages_raw) > 5:
+        pages = [page + " " for page in pages_raw[:5]]
+    # If we got fewer than 5, try splitting by single newlines or use what we have
+    else:
+        # Try splitting by single newline if double newline didn't work well
+        lines = [l.strip() for l in story_text.split('\n') if l.strip()]
+        if len(lines) >= 5:
+            # Distribute lines roughly evenly across 5 pages
+            lines_per_page = len(lines) // 5
+            for i in range(5):
+                start_idx = i * lines_per_page
+                end_idx = (i + 1) * lines_per_page if i < 4 else len(lines)
+                page_content = ' '.join(lines[start_idx:end_idx])
+                pages.append(page_content + " " if page_content else "")
         else:
-            # Fallback: split by paragraphs
-            paragraphs = story_text.split('\n\n')
-            if len(paragraphs) >= i:
-                pages.append(paragraphs[i-1].strip() + " ")
-            else:
+            # Fallback: use what we have and pad with empty strings
+            pages = [page + " " for page in pages_raw]
+            while len(pages) < 5:
                 pages.append("")
     
     full_story = "".join(pages)
