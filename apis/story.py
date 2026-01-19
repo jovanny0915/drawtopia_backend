@@ -164,8 +164,9 @@ async def list_all_books(request: Request, parent_id: Optional[str] = None):
             user_response = main.supabase.table("users").select("*").eq("id", parent_id).execute()
             user_data = user_response.data[0] if user_response.data and len(user_response.data) > 0 else None
             
-            # Get all stories for these child profiles
-            response = main.supabase.table("stories").select("*").in_("child_profile_id", child_profile_ids).order("created_at", desc=True).execute()
+            # Get all stories for these child profiles AND ensure they belong to this parent
+            # Filter by both child_profile_id and user_id to prevent cross-user data leakage
+            response = main.supabase.table("stories").select("*").in_("child_profile_id", child_profile_ids).eq("user_id", parent_id).order("created_at", desc=True).execute()
             
             if response.data is None:
                 main.logger.warning("No stories found or query returned None")
