@@ -135,10 +135,10 @@ async def list_all_books(request: Request, parent_id: Optional[str] = None):
     Get all story data from the stories table
     
     Args:
-        parent_id: Optional parent user ID to filter stories by parent's children
+        parent_id: Optional parent user ID to filter stories by user_id
     
     Returns:
-        List of all story/book data, optionally filtered by parent
+        List of all story/book data, optionally filtered by parent, with child profile information
     """
     import main  # Import here to avoid circular import
     try:
@@ -148,39 +148,47 @@ async def list_all_books(request: Request, parent_id: Optional[str] = None):
                 detail="Database service not available"
             )
         
-        # If parent_id is provided, filter by parent's children
+        # If parent_id is provided, filter stories by user_id
         if parent_id:
-            # First, get all child profile IDs for this parent
-            child_profiles_response = main.supabase.table("child_profiles").select("*").eq("parent_id", parent_id).execute()
+            # Step 1: Get all stories filtered by user_id from stories table
+            stories_response = main.supabase.table("stories").select("*").eq("user_id", parent_id).order("created_at", desc=True).execute()
             
-            if child_profiles_response.data is None or len(child_profiles_response.data) == 0:
-                main.logger.info(f"No child profiles found for parent {parent_id}")
-                return []
-            
-            # Extract child profile IDs
-            child_profile_ids = [profile["id"] for profile in child_profiles_response.data]
-            
-            # Get user data for parent
-            user_response = main.supabase.table("users").select("*").eq("id", parent_id).execute()
-            user_data = user_response.data[0] if user_response.data and len(user_response.data) > 0 else None
-            
-            # Get all stories for these child profiles AND ensure they belong to this parent
-            # Filter by both child_profile_id and user_id to prevent cross-user data leakage
-            response = main.supabase.table("stories").select("*").in_("child_profile_id", child_profile_ids).eq("user_id", parent_id).order("created_at", desc=True).execute()
-            
-            if response.data is None:
+            if stories_response.data is None:
                 main.logger.warning("No stories found or query returned None")
                 return []
             
-            # Merge child profile data with stories
+            if len(stories_response.data) == 0:
+                main.logger.info(f"No stories found for user {parent_id}")
+                return []
+            
+            # Step 2: Get unique child_profile_ids from the stories
+            child_profile_ids = list(set([story["child_profile_id"] for story in stories_response.data if story.get("child_profile_id")]))
+            
+            # Step 3: Fetch child profile information for all child_profile_ids
+            child_profiles_map = {}
+            if child_profile_ids:
+                child_profiles_response = main.supabase.table("child_profiles").select("*").in_("id", child_profile_ids).execute()
+                
+                if child_profiles_response.data:
+                    # Create a map for quick lookup
+                    child_profiles_map = {cp["id"]: cp for cp in child_profiles_response.data}
+            
+            # Step 4: Get user data for parent
+            user_response = main.supabase.table("users").select("*").eq("id", parent_id).execute()
+            user_data = user_response.data[0] if user_response.data and len(user_response.data) > 0 else None
+            
+            # Step 5: Merge child profile data with stories
             stories_with_child_data = []
-            for story in response.data:
-                child_profile = next((cp for cp in child_profiles_response.data if cp["id"] == story["child_profile_id"]), None)
+            for story in stories_response.data:
+                child_profile_id = story.get("child_profile_id")
+                child_profile = child_profiles_map.get(child_profile_id) if child_profile_id else None
+                
                 user_name = "Unknown"
                 if user_data:
                     first_name = user_data.get('first_name', '')
                     last_name = user_data.get('last_name', '')
                     user_name = f"{first_name} {last_name}".strip() or "Unknown"
+                
                 story_with_data = {
                     **story,
                     "user_name": user_name,
