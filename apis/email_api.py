@@ -24,7 +24,7 @@ async def send_email(email: EmailSchema):
     }
 
     payload = {
-        "from": "noreply@yourdomain.com",  # Use your verified domain email
+        "from": "noreply@email.drawtopia.ai",  # Use your verified domain email
         "to": email.to,
         "subject": email.subject,
         "html": email.body
