@@ -775,7 +775,8 @@ Questions? Reply to this email or contact hello@drawtopia.ai
         gift_message: str,
         story_link: str,
         download_link: str,
-        book_format: str = 'story_adventure'
+        book_format: str = 'story_adventure',
+        dashboard_link: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Send gift delivery email (final story delivered to recipient)
@@ -792,10 +793,15 @@ Questions? Reply to this email or contact hello@drawtopia.ai
             story_link: Link to read the story
             download_link: Link to download PDF
             book_format: 'interactive_search' or 'story_adventure'
+            dashboard_link: Link to dashboard notifications (optional)
         """
         subject = f"Your gift has arrived! Open '{book_title}' now 🎁📖"
         
         format_info = "4-scene Where's Waldo-style adventure" if book_format == 'interactive_search' else "5-page magical adventure"
+        
+        # Default dashboard link if not provided
+        if not dashboard_link:
+            dashboard_link = f"{FRONTEND_URL}/dashboard"
         
         # Load and render template
         html_content = self._load_template("gift_delivery.html").format(
@@ -809,6 +815,7 @@ Questions? Reply to this email or contact hello@drawtopia.ai
             story_link=story_link,
             download_link=download_link,
             gift_message=gift_message,
+            dashboard_link=dashboard_link,
             current_year=datetime.now().year
         )
         
@@ -829,6 +836,7 @@ It's a {format_info} where you'll have an amazing adventure!
 
 🎬 Open Your Gift: {story_link}
 📥 Download PDF: {download_link}
+🔔 View on Dashboard: {dashboard_link}
 
 From {giver_name}: "{gift_message}"
 

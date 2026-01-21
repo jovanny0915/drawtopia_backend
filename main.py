@@ -2482,15 +2482,48 @@ async def deliver_gift_endpoint(request: Request):
                 recipient_email = gift.get("delivery_email")
                 
                 if recipient_email:
-                    await send_gift_delivery(
-                        to_email=recipient_email,
-                        recipient_name=gift.get("child_name", "there"),
-                        giver_name=sender_name,
-                        occasion=gift.get("occasion", "special occasion"),
-                        child_name=gift.get("child_name", ""),
-                        gift_url=f"{FRONTEND_URL}/gift/recipient/gift1?giftId={gift_id}"
-                    )
-                    logger.info(f"✅ Gift delivery email also sent to {recipient_email}")
+                    # Try to find the story associated with this gift
+                    child_profile_id = gift.get("child_profile_id")
+                    story = None
+                    story_link = f"{FRONTEND_URL}/gift/recipient/gift1?giftId={gift_id}"
+                    download_link = f"{FRONTEND_URL}/api/books/0/download"  # Default, will be updated if story found
+                    dashboard_link = f"{FRONTEND_URL}/dashboard"
+                    
+                    if child_profile_id:
+                        try:
+                            # Find the most recent completed story for this child profile
+                            story_result = supabase.table("stories").select("*").eq("child_profile_id", child_profile_id).order("created_at", desc=True).limit(1).execute()
+                            if story_result.data and len(story_result.data) > 0:
+                                story = story_result.data[0]
+                                story_id = story.get("id")
+                                story_link = f"{FRONTEND_URL}/story/{story_id}"
+                                download_link = f"{FRONTEND_URL}/api/books/{story_id}/download"
+                        except Exception as e:
+                            logger.warning(f"Could not fetch story for gift: {e}")
+                    
+                    # Send gift delivery email with available information
+                    if story:
+                        # We have full story info, send complete email
+                        await send_gift_delivery(
+                            to_email=recipient_email,
+                            recipient_name=gift.get("child_name", "there"),
+                            giver_name=sender_name,
+                            character_name=story.get("character_name", "Your Character"),
+                            character_type=story.get("character_type", "Character"),
+                            book_title=story.get("title", "Your Story"),
+                            special_ability=story.get("special_ability", "special powers"),
+                            gift_message=gift.get("special_msg", "Enjoy your special story!"),
+                            story_link=story_link,
+                            download_link=download_link,
+                            book_format=story.get("job_type", "story_adventure"),
+                            dashboard_link=dashboard_link
+                        )
+                    else:
+                        # Fallback: send email with minimal info (using gift notification instead)
+                        logger.warning(f"Story not found for gift {gift_id}, skipping detailed delivery email")
+                        # Could send a simpler notification email here if needed
+                    
+                    logger.info(f"✅ Gift delivery email sent to {recipient_email}")
             except Exception as email_error:
                 logger.warning(f"Failed to send delivery email (not critical): {email_error}")
         
