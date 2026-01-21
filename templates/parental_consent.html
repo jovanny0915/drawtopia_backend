@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
+            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Where Drawings Come to Life</p>
+        </div>
+        
+        <!-- Content -->
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+            <h2 style="color: #1a1a2e; margin: 0 0 20px 0;">Parental Consent Required</h2>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                Hi {parent_name},
+            </p>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                Welcome to Drawtopia! 🎨✨
+            </p>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                {child_name}'s caregiver has started setting up an account on Drawtopia, 
+                a platform that transforms children's drawings into personalized storybooks.
+            </p>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                To complete the setup, we need you to verify that you consent to collect 
+                {child_name}'s information. This is required by law (COPPA compliance) and 
+                helps us keep their data safe.
+            </p>
+            
+            <!-- CTA Button -->
+            <div style="text-align: center; margin: 32px 0;">
+                <a href="{consent_link}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+                    Verify Consent
+                </a>
+            </div>
+            
+            <p style="color: #718096; font-size: 14px; margin-bottom: 20px;">
+                Or copy this link: <a href="{consent_link}" style="color: #667eea; word-break: break-all;">{consent_link}</a>
+            </p>
+            
+            <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
+                <p style="color: #92400e; margin: 0; font-size: 14px;">
+                    ⏰ This link expires in 48 hours
+                </p>
+            </div>
+            
+            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
+                Questions? Reply to this email or contact hello@drawtopia.ai
+            </p>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
+            <p style="margin: 0;">© {current_year} Drawtopia. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

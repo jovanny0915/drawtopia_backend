@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
+            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Creative AI Companion</p>
+        </div>
+        
+        <!-- Content -->
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <div style="background: #ef4444; width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
+                    <span style="font-size: 30px;">!</span>
+                </div>
+            </div>
+            
+            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Payment Failed</h2>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                Hi {name},
+            </p>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                We were unable to process your payment for your Drawtopia subscription. This could be due to:
+            </p>
+            
+            <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin-bottom: 20px;">
+                <li>Insufficient funds</li>
+                <li>Expired card</li>
+                <li>Card declined by your bank</li>
+            </ul>
+            
+            <!-- Payment Details Box -->
+            <div style="background: #fef2f2; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #ef4444;">
+                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Payment Details</h3>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Plan</td>
+                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{plan_display}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Amount</td>
+                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{amount_display}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Status</td>
+                        <td style="color: #ef4444; text-align: right; font-weight: 600;">✗ Failed</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                <strong>To keep your premium access</strong>, please update your payment method within the next 7 days.
+            </p>
+            
+            <!-- CTA Button -->
+            <div style="text-align: center; margin: 32px 0;">
+                <a href="{update_url}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+                    Update Payment Method
+                </a>
+            </div>
+            
+            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
+                Need help? Reply to this email and we'll assist you right away.
+            </p>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
+            <p style="margin: 0;">© {current_year} Drawtopia. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

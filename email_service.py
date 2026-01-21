@@ -1,6 +1,6 @@
 """
 Email Service for Drawtopia
-Uses Gmail SMTP for sending transactional emails (no domain verification needed)
+Uses Resend API for sending transactional emails
 
 Supported email types:
 - Welcome email on registration
@@ -15,53 +15,66 @@ Supported email types:
 - Gift delivery emails
 
 Setup:
-1. Enable 2-Step Verification in your Google Account
-2. Go to Google Account → Security → App passwords
-3. Create an App Password for "Mail"
-4. Add GMAIL_ADDRESS and GMAIL_APP_PASSWORD to .env
+1. Sign up at https://resend.com
+2. Get your API key from the dashboard
+3. Verify your domain (e.g., email.drawtopia.ai)
+4. Add RESEND_API_KEY and FROM_EMAIL to .env
 """
 
 import os
 import logging
-import smtplib
-import ssl
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import httpx
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Gmail SMTP Configuration
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
-GMAIL_SMTP_SERVER = "smtp.gmail.com"
-GMAIL_SMTP_PORT = 587  # TLS port
+# Resend API Configuration
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_API_URL = "https://api.resend.com/emails"
 
 # General Configuration
-FROM_EMAIL = os.getenv("FROM_EMAIL", GMAIL_ADDRESS)
+FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@email.drawtopia.ai")
 FROM_NAME = os.getenv("FROM_NAME", "Drawtopia")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # Initialize email service
-if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
-    logger.info("✅ Email service (Gmail SMTP) initialized successfully")
+if RESEND_API_KEY:
+    logger.info("✅ Email service (Resend API) initialized successfully")
     EMAIL_ENABLED = True
 else:
     EMAIL_ENABLED = False
-    logger.warning("⚠️ Gmail SMTP not configured. Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env")
+    logger.warning("⚠️ Resend API not configured. Set RESEND_API_KEY in .env")
 
 
 class EmailService:
-    """Email service for sending transactional emails via Gmail SMTP"""
+    """Email service for sending transactional emails via Resend API"""
     
     def __init__(self):
         self.enabled = EMAIL_ENABLED
         self.from_email = f"{FROM_NAME} <{FROM_EMAIL}>"
+        self.api_key = RESEND_API_KEY
+        self.api_url = RESEND_API_URL
+        # Get templates directory path
+        self.templates_dir = Path(__file__).parent / "templates"
     
     def is_enabled(self) -> bool:
         """Check if email service is enabled"""
         return self.enabled
+    
+    def _load_template(self, template_name: str) -> str:
+        """Load HTML template from file"""
+        template_path = self.templates_dir / template_name
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            logger.error(f"Template file not found: {template_path}")
+            raise
+        except Exception as e:
+            logger.error(f"Error loading template {template_name}: {e}")
+            raise
     
     async def send_email(
         self,
@@ -71,7 +84,7 @@ class EmailService:
         text_content: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Send an email using Gmail SMTP
+        Send an email using Resend API
         
         Args:
             to_email: Recipient email address
@@ -86,42 +99,65 @@ class EmailService:
             logger.warning("Email service not enabled, skipping email send")
             return {"success": False, "error": "Email service not configured"}
         
+        if not self.api_key:
+            logger.error("Resend API key is missing")
+            return {"success": False, "error": "Resend API key not configured"}
+        
         try:
-            # Create message
-            message = MIMEMultipart("alternative")
-            message["Subject"] = subject
-            message["From"] = self.from_email
-            message["To"] = to_email
+            # Prepare headers
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
             
-            # Add plain text part (for email clients that don't support HTML)
+            # Prepare payload
+            payload = {
+                "from": self.from_email,
+                "to": to_email,
+                "subject": subject,
+                "html": html_content
+            }
+            
+            # Add text content if provided
             if text_content:
-                part1 = MIMEText(text_content, "plain")
-                message.attach(part1)
+                payload["text"] = text_content
             
-            # Add HTML part
-            part2 = MIMEText(html_content, "html")
-            message.attach(part2)
+            logger.debug(f"Sending email to {to_email} via Resend API (from: {self.from_email})")
             
-            # Create secure SSL/TLS context
-            context = ssl.create_default_context()
+            # Send email via Resend API
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.api_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=30.0
+                )
             
-            # Connect to Gmail SMTP server
-            with smtplib.SMTP(GMAIL_SMTP_SERVER, GMAIL_SMTP_PORT) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.ehlo()
-                server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-                server.sendmail(GMAIL_ADDRESS, to_email, message.as_string())
+            # Check response (Resend API returns 200 or 201 for success)
+            if response.status_code in [200, 201]:
+                try:
+                    response_data = response.json()
+                    email_id = response_data.get("id", f"resend_{datetime.now().timestamp()}")
+                    logger.info(f"✅ Email sent successfully to {to_email} (ID: {email_id})")
+                    return {"success": True, "id": email_id}
+                except Exception as json_error:
+                    # If response is not JSON, still consider it successful if status is 200/201
+                    logger.warning(f"Could not parse JSON response, but status is {response.status_code}: {json_error}")
+                    email_id = f"resend_{datetime.now().timestamp()}"
+                    logger.info(f"✅ Email sent successfully to {to_email} (ID: {email_id})")
+                    return {"success": True, "id": email_id}
+            else:
+                try:
+                    error_data = response.json()
+                    error_message = error_data.get("message", response.text)
+                except:
+                    error_message = response.text
+                logger.error(f"❌ Resend API error sending email to {to_email}: {response.status_code} - {error_message}")
+                return {"success": False, "error": f"Resend API error ({response.status_code}): {error_message})"}
             
-            logger.info(f"✅ Email sent successfully to {to_email}")
-            return {"success": True, "id": f"gmail_{datetime.now().timestamp()}"}
-            
-        except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"❌ Gmail authentication failed: {e}")
-            return {"success": False, "error": "Gmail authentication failed. Check your App Password."}
-        except smtplib.SMTPException as e:
-            logger.error(f"❌ SMTP error sending email to {to_email}: {e}")
-            return {"success": False, "error": str(e)}
+        except httpx.HTTPError as e:
+            logger.error(f"❌ HTTP error sending email to {to_email}: {e}")
+            return {"success": False, "error": f"HTTP error: {str(e)}"}
         except Exception as e:
             logger.error(f"❌ Failed to send email to {to_email}: {e}")
             return {"success": False, "error": str(e)}
@@ -152,93 +188,18 @@ class EmailService:
         
         subject = "🎉 Payment Successful - Welcome to Drawtopia Premium!"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Creative AI Companion</p>
-        </div>
+        # Prepare template variables
+        next_billing_row = f'<tr><td style="color: #718096; padding: 8px 0;">Next billing</td><td style="color: #1a1a2e; text-align: right;">{next_billing_date}</td></tr>' if next_billing_date else ''
         
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: #10b981; width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 30px;">✓</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Payment Successful!</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Thank you for subscribing to Drawtopia Premium! Your payment has been processed successfully.
-            </p>
-            
-            <!-- Payment Details Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Payment Details</h3>
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Plan</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{plan_display}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Amount</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{amount_display}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Status</td>
-                        <td style="color: #10b981; text-align: right; font-weight: 600;">✓ Paid</td>
-                    </tr>
-                    {f'<tr><td style="color: #718096; padding: 8px 0;">Next billing</td><td style="color: #1a1a2e; text-align: right;">{next_billing_date}</td></tr>' if next_billing_date else ''}
-                </table>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Your premium features are now active! You have unlimited access to:
-            </p>
-            
-            <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px;">
-                <li>Unlimited AI image generations</li>
-                <li>Priority processing</li>
-                <li>Advanced story creation tools</li>
-                <li>Premium templates and styles</li>
-            </ul>
-            
-            <!-- CTA Button -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{FRONTEND_URL}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Start Creating
-                </a>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Questions? Just reply to this email and we'll help you out!
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-            <p style="margin: 8px 0 0 0;">
-                <a href="{FRONTEND_URL}/account" style="color: #667eea; text-decoration: none;">Manage Subscription</a>
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("payment_success.html").format(
+            name=name,
+            plan_display=plan_display,
+            amount_display=amount_display,
+            next_billing_row=next_billing_row,
+            frontend_url=FRONTEND_URL,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Payment Successful - Welcome to Drawtopia Premium!
@@ -293,88 +254,14 @@ Questions? Just reply to this email!
         
         subject = "⚠️ Payment Failed - Action Required"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Creative AI Companion</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: #ef4444; width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 30px;">!</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Payment Failed</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                We were unable to process your payment for your Drawtopia subscription. This could be due to:
-            </p>
-            
-            <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin-bottom: 20px;">
-                <li>Insufficient funds</li>
-                <li>Expired card</li>
-                <li>Card declined by your bank</li>
-            </ul>
-            
-            <!-- Payment Details Box -->
-            <div style="background: #fef2f2; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #ef4444;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Payment Details</h3>
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Plan</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{plan_display}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Amount</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{amount_display}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Status</td>
-                        <td style="color: #ef4444; text-align: right; font-weight: 600;">✗ Failed</td>
-                    </tr>
-                </table>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                <strong>To keep your premium access</strong>, please update your payment method within the next 7 days.
-            </p>
-            
-            <!-- CTA Button -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{update_url}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Update Payment Method
-                </a>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Need help? Reply to this email and we'll assist you right away.
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("payment_failed.html").format(
+            name=name,
+            plan_display=plan_display,
+            amount_display=amount_display,
+            update_url=update_url,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Payment Failed - Action Required
@@ -426,74 +313,14 @@ Need help? Reply to this email!
         
         subject = "Your Drawtopia Subscription Has Been Cancelled"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Creative AI Companion</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Subscription Cancelled</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                We're sorry to see you go! Your <strong>{plan_display}</strong> subscription to Drawtopia has been cancelled.
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                {access_info}
-            </p>
-            
-            <!-- Info Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #718096;">
-                <h3 style="color: #1a1a2e; margin: 0 0 12px 0; font-size: 16px;">What happens next?</h3>
-                <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin: 0;">
-                    <li>You can continue using free features</li>
-                    <li>Your created content remains accessible</li>
-                    <li>You can resubscribe anytime</li>
-                </ul>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                We'd love to have you back! If you change your mind, you can resubscribe at any time.
-            </p>
-            
-            <!-- CTA Button -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{FRONTEND_URL}/pricing" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Resubscribe
-                </a>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Was this a mistake? Reply to this email and we'll help sort it out.
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-            <p style="margin: 8px 0 0 0;">
-                We hope to see you again soon! 💜
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("subscription_cancelled.html").format(
+            name=name,
+            plan_display=plan_display,
+            access_info=access_info,
+            frontend_url=FRONTEND_URL,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Your Drawtopia Subscription Has Been Cancelled
@@ -558,74 +385,13 @@ Was this a mistake? Reply to this email and we'll help!
         """
         subject = f"Verify your account on Drawtopia — Help {child_name} create magical stories"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Where Drawings Come to Life</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0;">Parental Consent Required</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {parent_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Welcome to Drawtopia! 🎨✨
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                {child_name}'s caregiver has started setting up an account on Drawtopia, 
-                a platform that transforms children's drawings into personalized storybooks.
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                To complete the setup, we need you to verify that you consent to collect 
-                {child_name}'s information. This is required by law (COPPA compliance) and 
-                helps us keep their data safe.
-            </p>
-            
-            <!-- CTA Button -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{consent_link}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Verify Consent
-                </a>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; margin-bottom: 20px;">
-                Or copy this link: <a href="{consent_link}" style="color: #667eea; word-break: break-all;">{consent_link}</a>
-            </p>
-            
-            <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
-                <p style="color: #92400e; margin: 0; font-size: 14px;">
-                    ⏰ This link expires in 48 hours
-                </p>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Questions? Reply to this email or contact hello@drawtopia.ai
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("parental_consent.html").format(
+            parent_name=parent_name,
+            child_name=child_name,
+            consent_link=consent_link,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Verify your account on Drawtopia — Help {child_name} create magical stories
@@ -665,84 +431,12 @@ Questions? Reply to this email or contact hello@drawtopia.ai
         
         subject = "🎉 Welcome to Drawtopia - Let's Create Something Amazing!"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Creative AI Companion</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); width: 70px; height: 70px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 35px;">🎉</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Welcome to Drawtopia!</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                We're thrilled to have you join our creative community! Your account has been created successfully and you're ready to start creating amazing AI-powered artwork.
-            </p>
-            
-            <!-- Features Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">What you can do with Drawtopia</h3>
-                <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin: 0;">
-                    <li>Transform your ideas into stunning AI artwork</li>
-                    <li>Create illustrated stories with AI assistance</li>
-                    <li>Explore different artistic styles and templates</li>
-                    <li>Save and share your creative masterpieces</li>
-                </ul>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Ready to unleash your creativity? Click the button below to start your journey!
-            </p>
-            
-            <!-- CTA Button -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{FRONTEND_URL}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Start Creating
-                </a>
-            </div>
-            
-            <!-- Pro Tip Box -->
-            <div style="background: linear-gradient(135deg, rgba(102,126,234,0.1) 0%, rgba(118,75,162,0.1) 100%); border-radius: 12px; padding: 20px; margin: 24px 0; text-align: center;">
-                <p style="color: #667eea; margin: 0; font-size: 14px;">
-                    💡 <strong>Pro Tip:</strong> Check out our <a href="{FRONTEND_URL}/pricing" style="color: #764ba2; text-decoration: underline;">Premium plans</a> for unlimited generations and exclusive features!
-                </p>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Have questions? Just reply to this email – we're here to help!
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-            <p style="margin: 8px 0 0 0;">
-                Made with 💜 for creative minds everywhere
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("welcome.html").format(
+            name=name,
+            frontend_url=FRONTEND_URL,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Welcome to Drawtopia!
@@ -826,81 +520,18 @@ Made with 💜 for creative minds everywhere
                 <li>Reading Time: ~10 minutes</li>
 """
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Story is Ready!</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: #10b981; width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 30px;">🎉</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Great news! {character_name}'s story is ready!</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {parent_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                {child_name} created "<strong>{book_title}</strong>" — {format_description}.
-            </p>
-            
-            <!-- CTA Buttons -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{preview_link}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; margin-bottom: 12px;">
-                    📖 Start Reading
-                </a>
-                <br>
-                <a href="{download_link}" style="background: #8B4CDF; color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    💾 Download PDF
-                </a>
-            </div>
-            
-            <!-- Story Details Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Story Details</h3>
-                <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin: 0;">
-                    {format_details}
-                </ul>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                {child_name} will love seeing their drawing come to life! You can also print the PDF as a keepsake.
-            </p>
-            
-            <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin: 24px 0; border-left: 4px solid #f59e0b;">
-                <p style="color: #92400e; margin: 0; font-size: 14px;">
-                    💡 This book is available for 30 days. Download it now to keep forever!
-                </p>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Happy reading! 📚
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("book_completion.html").format(
+            character_name=character_name,
+            parent_name=parent_name,
+            child_name=child_name,
+            book_title=book_title,
+            format_description=format_description,
+            preview_link=preview_link,
+            download_link=download_link,
+            format_details=format_details,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 {character_name}'s story is ready!
@@ -967,78 +598,17 @@ Happy reading! 📚
 """
             items_text += f"- {item['name']}: ${item['amount']:.2f}\n"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Receipt</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0;">Thank you for your purchase!</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {customer_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Here's your receipt for your recent Drawtopia purchase.
-            </p>
-            
-            <!-- Receipt Details Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Order Details</h3>
-                <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Order ID</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{transaction_id}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Date</td>
-                        <td style="color: #1a1a2e; text-align: right;">{transaction_date.strftime('%B %d, %Y')}</td>
-                    </tr>
-                </table>
-                
-                <h3 style="color: #1a1a2e; margin: 16px 0 12px 0; font-size: 16px;">Items</h3>
-                <table style="width: 100%; border-collapse: collapse;">
-                    {items_html}
-                    <tr style="border-top: 2px solid #e2e8f0;">
-                        <td style="color: #718096; padding: 8px 0;">Subtotal</td>
-                        <td style="color: #1a1a2e; text-align: right;">${subtotal:.2f}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Tax</td>
-                        <td style="color: #1a1a2e; text-align: right;">${tax:.2f}</td>
-                    </tr>
-                    <tr style="border-top: 2px solid #e2e8f0;">
-                        <td style="color: #1a1a2e; padding: 8px 0; font-weight: 600; font-size: 18px;">Total</td>
-                        <td style="color: #667eea; text-align: right; font-weight: 600; font-size: 18px;">${total:.2f}</td>
-                    </tr>
-                </table>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Need help? Reply to this email or contact hello@drawtopia.ai
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("receipt.html").format(
+            customer_name=customer_name,
+            transaction_id=transaction_id,
+            transaction_date=transaction_date.strftime('%B %d, %Y'),
+            items_html=items_html,
+            subtotal=f"{subtotal:.2f}",
+            tax=f"{tax:.2f}",
+            total=f"{total:.2f}",
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Receipt for your Drawtopia purchase (Order #{transaction_id[:8]})
@@ -1088,81 +658,16 @@ Need help? Reply to this email or contact hello@drawtopia.ai
         """
         subject = f"Your Drawtopia subscription renews on {renewal_date.strftime('%B %d')}"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Subscription Renewal Reminder</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0;">Your subscription renews soon</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {customer_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                This is a friendly reminder that your <strong>{plan_type}</strong> subscription to Drawtopia 
-                will automatically renew on <strong>{renewal_date.strftime('%B %d, %Y')}</strong>.
-            </p>
-            
-            <!-- Renewal Details Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Renewal Details</h3>
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Plan</td>
-                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{plan_type}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Renewal Date</td>
-                        <td style="color: #1a1a2e; text-align: right;">{renewal_date.strftime('%B %d, %Y')}</td>
-                    </tr>
-                    <tr>
-                        <td style="color: #718096; padding: 8px 0;">Amount</td>
-                        <td style="color: #667eea; text-align: right; font-weight: 600; font-size: 18px;">${renewal_amount:.2f}</td>
-                    </tr>
-                </table>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                No action is needed! Your subscription will renew automatically and you'll continue to enjoy all premium features.
-            </p>
-            
-            <!-- CTA Buttons -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{manage_link}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; margin-bottom: 12px;">
-                    Manage Subscription
-                </a>
-                <br>
-                <a href="{cancel_link}" style="color: #718096; text-decoration: underline; font-size: 14px;">
-                    Cancel Subscription
-                </a>
-            </div>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Questions? Reply to this email and we'll help!
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("subscription_renewal_reminder.html").format(
+            customer_name=customer_name,
+            plan_type=plan_type,
+            renewal_date=renewal_date.strftime('%B %d, %Y'),
+            renewal_amount=f"{renewal_amount:.2f}",
+            manage_link=manage_link,
+            cancel_link=cancel_link,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Your Drawtopia subscription renews on {renewal_date.strftime('%B %d')}
@@ -1218,80 +723,15 @@ Questions? Reply to this email!
         else:
             delivery_info = f"{giver_name} is asking a grown-up in your life to help create your story. Ask them to check their email for the creation link."
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎁 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">You've Received a Gift!</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%); width: 70px; height: 70px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 35px;">🎁</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">You're about to receive a very special gift! 🎉</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {recipient_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                <strong>{giver_name}</strong> is creating a personalized storybook just for you!
-            </p>
-            
-            <!-- Gift Details Box -->
-            <div style="background: #fef3c7; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #f59e0b;">
-                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">About Your Gift</h3>
-                <ul style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin: 0;">
-                    <li><strong>Occasion:</strong> {occasion}</li>
-                    <li><strong>Message from {giver_name}:</strong> "{gift_message}"</li>
-                    <li><strong>Status:</strong> Being created with your character...</li>
-                </ul>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                {delivery_info}
-            </p>
-            
-            <!-- How It Works Box -->
-            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
-                <h3 style="color: #1a1a2e; margin: 0 0 12px 0; font-size: 16px;">How It Works</h3>
-                <ol style="color: #4a5568; line-height: 1.8; padding-left: 20px; margin: 0;">
-                    <li>Your grown-up creates your character</li>
-                    <li>We generate a magical story featuring YOU</li>
-                    <li>You read your personalized adventure!</li>
-                </ol>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px; text-align: center;">
-                We can't wait for you to meet your character! 🌟
-            </p>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Questions? Reply to this email or contact hello@drawtopia.ai
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("gift_notification.html").format(
+            recipient_name=recipient_name,
+            giver_name=giver_name,
+            occasion=occasion,
+            gift_message=gift_message,
+            delivery_info=delivery_info,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 You've been sent a gift on Drawtopia! 🎁✨
@@ -1357,92 +797,20 @@ Questions? Reply to this email or contact hello@drawtopia.ai
         
         format_info = "4-scene Where's Waldo-style adventure" if book_format == 'interactive_search' else "5-page magical adventure"
         
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🎁 Drawtopia</h1>
-            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Your Gift Has Arrived!</p>
-        </div>
-        
-        <!-- Content -->
-        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <div style="text-align: center; margin-bottom: 30px;">
-                <div style="background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%); width: 70px; height: 70px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 35px;">🎁</span>
-                </div>
-            </div>
-            
-            <h2 style="color: #1a1a2e; margin: 0 0 20px 0; text-align: center;">Your gift is here! 🎉✨</h2>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Hi {recipient_name},
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                <strong>{giver_name}</strong> created a special personalized storybook just for you called:
-            </p>
-            
-            <h3 style="color: #667eea; text-align: center; font-size: 22px; margin: 24px 0;">
-                📖 "{book_title}"
-            </h3>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                Featuring the character YOU created: <strong>{character_name}</strong>, a {character_type} 
-                with the special ability to {special_ability}!
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                It's a {format_info} where you'll have an amazing adventure!
-            </p>
-            
-            <!-- CTA Buttons -->
-            <div style="text-align: center; margin: 32px 0;">
-                <a href="{story_link}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; margin-bottom: 12px;">
-                    🎬 Open Your Gift
-                </a>
-                <br>
-                <a href="{download_link}" style="background: #8B4CDF; color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    📥 Download PDF
-                </a>
-            </div>
-            
-            <!-- Gift Message Box -->
-            <div style="background: #fef3c7; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #f59e0b;">
-                <p style="color: #92400e; margin: 0;">
-                    <strong>From {giver_name}:</strong><br>
-                    "{gift_message}"
-                </p>
-            </div>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
-                This is your special copy! Only you can access it. You can read it anytime, share it with friends, or download it to keep forever. 💫
-            </p>
-            
-            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px; text-align: center;">
-                Happy reading!
-            </p>
-            
-            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
-                Love your gift? Send a thank you to {giver_name}!
-            </p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
-            <p style="margin: 0;">© {datetime.now().year} Drawtopia. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        # Load and render template
+        html_content = self._load_template("gift_delivery.html").format(
+            recipient_name=recipient_name,
+            giver_name=giver_name,
+            character_name=character_name,
+            character_type=character_type,
+            book_title=book_title,
+            special_ability=special_ability,
+            format_info=format_info,
+            story_link=story_link,
+            download_link=download_link,
+            gift_message=gift_message,
+            current_year=datetime.now().year
+        )
         
         text_content = f"""
 Your gift has arrived! Open '{book_title}' now 🎁📖

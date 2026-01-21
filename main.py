@@ -36,11 +36,9 @@ from email_service import (
     send_payment_failed,
     send_subscription_cancelled,
     send_welcome,
-    send_parental_consent,
     send_book_completion,
     send_receipt,
     send_subscription_renewal_reminder,
-    send_gift_notification,
     send_gift_delivery
 )
 # Email queue removed - sending emails directly now
@@ -2364,133 +2362,6 @@ class AuthSyncRequest(BaseModel):
     name: Optional[str] = None
 
 
-@app.post("/api/emails/parental-consent")
-@limiter.limit("10/minute")
-async def send_parental_consent_email_endpoint(request: Request):
-    """Send parental consent verification email"""
-    try:
-        body = await request.json()
-        
-        parent_email = body.get("parent_email")
-        parent_name = body.get("parent_name")
-        child_name = body.get("child_name")
-        
-        if not all([parent_email, parent_name, child_name]):
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required fields: parent_email, parent_name, child_name"
-            )
-        
-        if not email_service.is_enabled():
-            raise HTTPException(
-                status_code=503,
-                detail="Email service not available"
-            )
-        
-        # Generate consent link (expires in 48 hours)
-        consent_token = str(uuid.uuid4())
-        consent_link = f"{FRONTEND_URL}/consent/verify?token={consent_token}"
-        
-        # Send the email
-        await send_parental_consent(
-            to_email=parent_email,
-            parent_name=parent_name,
-            child_name=child_name,
-            consent_link=consent_link
-        )
-        
-        logger.info(f"✅ Parental consent email sent to {parent_email}")
-        return {"success": True, "message": "Parental consent email sent"}
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error sending parental consent email: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/emails/welcome")
-@limiter.limit("10/minute")
-async def send_welcome_email_endpoint(request: Request):
-    """Send welcome email to new user"""
-    try:
-        body = await request.json()
-        
-        to_email = body.get("to_email")
-        customer_name = body.get("customer_name")
-        
-        if not to_email:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required field: to_email"
-            )
-        
-        if not email_service.is_enabled():
-            raise HTTPException(
-                status_code=503,
-                detail="Email service not available"
-            )
-        
-        # Send welcome email
-        await send_welcome(
-            to_email=to_email,
-            customer_name=customer_name
-        )
-        
-        logger.info(f"✅ Welcome email sent to {to_email}")
-        return {"success": True, "message": "Welcome email sent"}
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error sending welcome email: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/emails/gift-notification")
-@limiter.limit("10/minute")
-async def send_gift_notification_email_endpoint(request: Request):
-    """Send gift notification email"""
-    try:
-        body = await request.json()
-        
-        recipient_email = body.get("recipient_email")
-        recipient_name = body.get("recipient_name")
-        giver_name = body.get("giver_name")
-        occasion = body.get("occasion")
-        gift_message = body.get("gift_message", "")
-        
-        if not all([recipient_email, recipient_name, giver_name, occasion]):
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required fields: recipient_email, recipient_name, giver_name, occasion"
-            )
-        
-        if not email_service.is_enabled():
-            raise HTTPException(
-                status_code=503,
-                detail="Email service not available"
-            )
-        
-        # Send the email (Note: scheduled sending not supported without queue)
-        await send_gift_notification(
-            to_email=recipient_email,
-            recipient_name=recipient_name,
-            giver_name=giver_name,
-            occasion=occasion,
-            gift_message=gift_message
-        )
-        
-        logger.info(f"✅ Gift notification email sent to {recipient_email}")
-        return {"success": True, "message": "Gift notification email sent"}
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error sending gift notification email: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/api/gift/deliver")
 async def deliver_gift_endpoint(request: Request):
     """
@@ -2678,12 +2549,17 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
             
             if email_service.is_enabled():
                 try:
-                    await send_welcome(
+                    result = await send_welcome(
                         to_email=email,
                         customer_name=customer_name
                     )
-                    logger.info(f"✅ Welcome email sent to {email}")
-                    welcome_email_sent = True
+                    # Check if email was sent successfully
+                    if result.get("success", False):
+                        logger.info(f"✅ Welcome email sent to {email} (ID: {result.get('id', 'N/A')})")
+                        welcome_email_sent = True
+                    else:
+                        error_msg = result.get("error", "Unknown error")
+                        logger.error(f"❌ Failed to send welcome email to {email}: {error_msg}")
                 except Exception as email_error:
                     logger.error(f"❌ Exception sending welcome email: {email_error}")
             else:

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7fa;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px 16px 0 0; padding: 40px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">🎨 Drawtopia</h1>
+            <p style="color: rgba(255,255,255,0.9); margin-top: 8px;">Receipt</p>
+        </div>
+        
+        <!-- Content -->
+        <div style="background: white; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+            <h2 style="color: #1a1a2e; margin: 0 0 20px 0;">Thank you for your purchase!</h2>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                Hi {customer_name},
+            </p>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin-bottom: 20px;">
+                Here's your receipt for your recent Drawtopia purchase.
+            </p>
+            
+            <!-- Receipt Details Box -->
+            <div style="background: #f8fafc; border-radius: 12px; padding: 24px; margin: 24px 0; border-left: 4px solid #667eea;">
+                <h3 style="color: #1a1a2e; margin: 0 0 16px 0; font-size: 16px;">Order Details</h3>
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Order ID</td>
+                        <td style="color: #1a1a2e; text-align: right; font-weight: 600;">{transaction_id}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Date</td>
+                        <td style="color: #1a1a2e; text-align: right;">{transaction_date}</td>
+                    </tr>
+                </table>
+                
+                <h3 style="color: #1a1a2e; margin: 16px 0 12px 0; font-size: 16px;">Items</h3>
+                <table style="width: 100%; border-collapse: collapse;">
+                    {items_html}
+                    <tr style="border-top: 2px solid #e2e8f0;">
+                        <td style="color: #718096; padding: 8px 0;">Subtotal</td>
+                        <td style="color: #1a1a2e; text-align: right;">${subtotal}</td>
+                    </tr>
+                    <tr>
+                        <td style="color: #718096; padding: 8px 0;">Tax</td>
+                        <td style="color: #1a1a2e; text-align: right;">${tax}</td>
+                    </tr>
+                    <tr style="border-top: 2px solid #e2e8f0;">
+                        <td style="color: #1a1a2e; padding: 8px 0; font-weight: 600; font-size: 18px;">Total</td>
+                        <td style="color: #667eea; text-align: right; font-weight: 600; font-size: 18px;">${total}</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <p style="color: #718096; font-size: 14px; text-align: center; margin-top: 32px;">
+                Need help? Reply to this email or contact hello@drawtopia.ai
+            </p>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; padding: 24px; color: #718096; font-size: 12px;">
+            <p style="margin: 0;">© {current_year} Drawtopia. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
