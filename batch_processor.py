@@ -1007,7 +1007,6 @@ class BatchProcessor:
             frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
             preview_link = f"{frontend_url}/story/{book_id}"
             download_link = f"{frontend_url}/api/books/{book_id}/download"
-            dashboard_link = f"{frontend_url}/dashboard"
             
             if is_gift and gift_data:
                 # This is a gift - send gift delivery email instead
@@ -1035,8 +1034,7 @@ class BatchProcessor:
                             gift_message=gift_data.get("special_msg", "Enjoy your special story!"),
                             story_link=preview_link,
                             download_link=download_link,
-                            book_format=job.get("job_type", "story_adventure"),
-                            dashboard_link=dashboard_link
+                            book_format=job.get("job_type", "story_adventure")
                         )
                         logger.info(f"✅ Gift delivery email sent to {gift_data.get('delivery_email')} (Job {job_id})")
                         
