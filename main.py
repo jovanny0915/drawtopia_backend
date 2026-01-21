@@ -23,6 +23,7 @@ from PIL import Image as PILImage
 from google import genai
 from google.genai import types
 from google.genai.types import Image as GeminiImage
+from apis import email_api
 from story_lib import generate_story
 from typing import List, Optional, Dict, Any
 from queue_manager import QueueManager
@@ -2705,6 +2706,8 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error syncing user: {str(e)}")
 
+
+app.include_router(email_api.router, prefix="/api")
 
 if __name__ == "__main__":
     print("🚀 Starting AI Image Editor Server...")
