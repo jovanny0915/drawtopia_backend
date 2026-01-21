@@ -30,20 +30,11 @@ from queue_manager import QueueManager
 from batch_processor import BatchProcessor
 from validation_utils import ConsistencyValidationResult
 from audio_generator import AudioGenerator
-from email_service import (
-    email_service,
-    send_payment_success,
-    send_payment_failed,
-    send_subscription_cancelled,
-    send_welcome,
-    send_book_completion,
-    send_receipt,
-    send_subscription_renewal_reminder,
-    send_gift_delivery
-)
-# Email queue removed - sending emails directly now
+from email_service import email_service
+# Email queue removed - sending emails via API now
 import asyncio
 from contextlib import asynccontextmanager
+import httpx
 
 # Import security utilities
 from rate_limiter import limiter, rate_limit_exceeded_handler
@@ -238,6 +229,29 @@ from apis.image import router as image_router
 from apis.children import router as children_router
 from apis.character import router as character_router
 from apis.story import router as story_router
+
+# Helper function to call email API endpoints internally
+async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Helper function to call email API endpoints internally.
+    This allows all email flows to go through the API layer.
+    """
+    try:
+        # Get the base URL for internal API calls
+        # In production, this could be the actual server URL, but for internal calls we can use localhost
+        base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+        api_url = f"{base_url}/api{endpoint}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(api_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error calling email API {endpoint}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"Error calling email API {endpoint}: {e}")
+        return {"success": False, "error": str(e)}
 app.include_router(image_router)
 app.include_router(children_router)
 app.include_router(character_router)
@@ -1788,6 +1802,7 @@ async def handle_checkout_completed(session):
     try:
         mode = session.get("mode")
         metadata = session.get("metadata", {})
+        logger.info(f"Checkout completed: {session}")
         
         # Handle one-time payment (story purchase)
         if mode == "payment":
@@ -2060,15 +2075,18 @@ async def handle_subscription_deleted(subscription):
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
                 logger.info(f"Updated user {user_id} with cancelled subscription status")
         
-        # Send subscription cancelled email
+        # Send subscription cancelled email via API
         if customer_email and email_service.is_enabled():
-            await send_subscription_cancelled(
-                to_email=customer_email,
-                customer_name=customer_name,
-                plan_type=plan_type,
-                access_until=access_until
-            )
-            logger.info(f"Sent subscription cancelled email to {customer_email}")
+            result = await call_email_api("/emails/subscription-cancelled", {
+                "to_email": customer_email,
+                "customer_name": customer_name,
+                "plan_type": plan_type,
+                "access_until": access_until
+            })
+            if result.get("success"):
+                logger.info(f"✅ Subscription cancelled email sent to {customer_email}")
+            else:
+                logger.error(f"❌ Failed to send subscription cancelled email: {result.get('error')}")
             
     except Exception as e:
         logger.error(f"Error handling subscription deleted: {e}")
@@ -2210,7 +2228,7 @@ async def handle_payment_succeeded(invoice):
                             except Exception as e:
                                 logger.warning(f"Could not find user by email to update stripe_customer_id: {e}")
             
-            # Send payment success email
+            # Send payment success email via API
             logger.info(f"Attempting to send payment success email - Email: {customer_email}, Service enabled: {email_service.is_enabled()}")
             
             if not customer_email:
@@ -2221,28 +2239,34 @@ async def handle_payment_succeeded(invoice):
                 try:
                     amount_display = f"${amount_paid / 100:.2f}" if amount_paid else None
                     
-                    # Send payment success email
-                    await send_payment_success(
-                        to_email=customer_email,
-                        customer_name=customer_name,
-                        plan_type=plan_type,
-                        amount=amount_display,
-                        next_billing_date=next_billing_date
-                    )
-                    logger.info(f"✅ Payment success email sent to {customer_email}")
+                    # Send payment success email via API
+                    result = await call_email_api("/emails/payment-success", {
+                        "to_email": customer_email,
+                        "customer_name": customer_name,
+                        "plan_type": plan_type,
+                        "amount": amount_display,
+                        "next_billing_date": next_billing_date
+                    })
+                    if result.get("success"):
+                        logger.info(f"✅ Payment success email sent to {customer_email}")
+                    else:
+                        logger.error(f"❌ Failed to send payment success email: {result.get('error')}")
                     
-                    # Also send receipt email
-                    await send_receipt(
-                        to_email=customer_email,
-                        customer_name=customer_name or "Customer",
-                        transaction_id=invoice.get("id", "N/A"),
-                        items=[{"name": f"{plan_type.capitalize()} Subscription", "amount": amount_paid / 100}],
-                        subtotal=amount_paid / 100,
-                        tax=0,
-                        total=amount_paid / 100,
-                        transaction_date=datetime.utcnow()
-                    )
-                    logger.info(f"✅ Receipt email sent to {customer_email}")
+                    # Also send receipt email via API
+                    receipt_result = await call_email_api("/emails/receipt", {
+                        "to_email": customer_email,
+                        "customer_name": customer_name or "Customer",
+                        "transaction_id": invoice.get("id", "N/A"),
+                        "items": [{"name": f"{plan_type.capitalize()} Subscription", "amount": amount_paid / 100}],
+                        "subtotal": amount_paid / 100,
+                        "tax": 0,
+                        "total": amount_paid / 100,
+                        "transaction_date": datetime.utcnow().isoformat()
+                    })
+                    if receipt_result.get("success"):
+                        logger.info(f"✅ Receipt email sent to {customer_email}")
+                    else:
+                        logger.error(f"❌ Failed to send receipt email: {receipt_result.get('error')}")
                 except Exception as email_error:
                     logger.error(f"❌ Exception sending payment success email: {email_error}")
                 
@@ -2312,7 +2336,7 @@ async def handle_payment_failed(invoice):
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("stripe_subscription_id", subscription_id).execute()
             
-            # Send payment failed email
+            # Send payment failed email via API
             logger.info(f"Attempting to send payment failed email - Email: {customer_email}, Service enabled: {email_service.is_enabled()}")
             
             if not customer_email:
@@ -2322,14 +2346,17 @@ async def handle_payment_failed(invoice):
             else:
                 try:
                     amount_display = f"${amount_due / 100:.2f}" if amount_due else None
-                    await send_payment_failed(
-                        to_email=customer_email,
-                        customer_name=customer_name,
-                        plan_type=plan_type,
-                        amount=amount_display,
-                        retry_url=f"{FRONTEND_URL}/account"
-                    )
-                    logger.info(f"✅ Payment failed email sent to {customer_email}")
+                    result = await call_email_api("/emails/payment-failed", {
+                        "to_email": customer_email,
+                        "customer_name": customer_name,
+                        "plan_type": plan_type,
+                        "amount": amount_display,
+                        "retry_url": f"{FRONTEND_URL}/account"
+                    })
+                    if result.get("success"):
+                        logger.info(f"✅ Payment failed email sent to {customer_email}")
+                    else:
+                        logger.error(f"❌ Failed to send payment failed email: {result.get('error')}")
                 except Exception as email_error:
                     logger.error(f"❌ Exception sending payment failed email: {email_error}")
                 
@@ -2482,15 +2509,19 @@ async def deliver_gift_endpoint(request: Request):
                 recipient_email = gift.get("delivery_email")
                 
                 if recipient_email:
-                    await send_gift_delivery(
-                        to_email=recipient_email,
-                        recipient_name=gift.get("child_name", "there"),
-                        giver_name=sender_name,
-                        occasion=gift.get("occasion", "special occasion"),
-                        child_name=gift.get("child_name", ""),
-                        gift_url=f"{FRONTEND_URL}/gift/recipient/gift1?giftId={gift_id}"
-                    )
-                    logger.info(f"✅ Gift delivery email also sent to {recipient_email}")
+                    # Note: This is a gift notification (story is being created)
+                    # Full gift delivery email with story details is sent from batch_processor when story is completed
+                    result = await call_email_api("/emails/gift-notification", {
+                        "recipient_email": recipient_email,
+                        "recipient_name": gift.get("child_name", "there"),
+                        "giver_name": sender_name,
+                        "occasion": gift.get("occasion", "special occasion"),
+                        "gift_message": gift.get("special_msg", "Enjoy your special story!")
+                    })
+                    if result.get("success"):
+                        logger.info(f"✅ Gift notification email sent to {recipient_email}")
+                    else:
+                        logger.warning(f"Failed to send gift notification email: {result.get('error')}")
             except Exception as email_error:
                 logger.warning(f"Failed to send delivery email (not critical): {email_error}")
         
@@ -2549,13 +2580,13 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
             
             if email_service.is_enabled():
                 try:
-                    result = await send_welcome(
-                        to_email=email,
-                        customer_name=customer_name
-                    )
+                    result = await call_email_api("/emails/welcome", {
+                        "to_email": email,
+                        "customer_name": customer_name
+                    })
                     # Check if email was sent successfully
                     if result.get("success", False):
-                        logger.info(f"✅ Welcome email sent to {email} (ID: {result.get('id', 'N/A')})")
+                        logger.info(f"✅ Welcome email sent to {email} (ID: {result.get('email_id', 'N/A')})")
                         welcome_email_sent = True
                     else:
                         error_msg = result.get("error", "Unknown error")

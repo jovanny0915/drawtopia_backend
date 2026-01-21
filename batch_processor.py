@@ -19,8 +19,31 @@ from pdf_generator import generate_pdf
 from datetime import datetime
 import uuid
 import time
+import httpx
 
 logger = logging.getLogger(__name__)
+
+# Helper function to call email API endpoints internally
+async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Helper function to call email API endpoints internally.
+    This allows all email flows to go through the API layer.
+    """
+    try:
+        # Get the base URL for internal API calls
+        base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+        api_url = f"{base_url}/api{endpoint}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(api_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error calling email API {endpoint}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"Error calling email API {endpoint}: {e}")
+        return {"success": False, "error": str(e)}
 
 
 class BatchProcessor:
@@ -965,12 +988,8 @@ class BatchProcessor:
                 logger.warning("Supabase not available, skipping book completion email")
                 return
             
-            # Import email functions
-            from email_service import (
-                email_service,
-                send_book_completion,
-                send_gift_delivery
-            )
+            # Import email service to check if enabled
+            from email_service import email_service
             
             # Get user and child profile information
             user_id = job.get("user_id")
@@ -1020,26 +1039,29 @@ class BatchProcessor:
                     giver = giver_result.data[0]
                     giver_name = f"{giver.get('first_name', '')} {giver.get('last_name', '')}".strip() or giver_name
                 
-                # Send gift delivery email
+                # Send gift delivery email via API
                 if email_service.is_enabled():
                     try:
-                        await send_gift_delivery(
-                            to_email=gift_data.get("delivery_email"),
-                            recipient_name=gift_data.get("child_name", "there"),
-                            giver_name=giver_name,
-                            character_name=job_data.get("character_name", "Your Character"),
-                            character_type=job_data.get("character_type", "Character"),
-                            book_title=book_title,
-                            special_ability=job_data.get("special_ability", "special powers"),
-                            gift_message=gift_data.get("special_msg", "Enjoy your special story!"),
-                            story_link=preview_link,
-                            download_link=download_link,
-                            book_format=job.get("job_type", "story_adventure")
-                        )
-                        logger.info(f"✅ Gift delivery email sent to {gift_data.get('delivery_email')} (Job {job_id})")
-                        
-                        # Update gift status to completed
-                        self.supabase.table("gifts").update({"status": "completed"}).eq("id", gift_data.get("id")).execute()
+                        result = await call_email_api("/emails/gift-delivery", {
+                            "to_email": gift_data.get("delivery_email"),
+                            "recipient_name": gift_data.get("child_name", "there"),
+                            "giver_name": giver_name,
+                            "character_name": job_data.get("character_name", "Your Character"),
+                            "character_type": job_data.get("character_type", "Character"),
+                            "book_title": book_title,
+                            "special_ability": job_data.get("special_ability", "special powers"),
+                            "gift_message": gift_data.get("special_msg", "Enjoy your special story!"),
+                            "story_link": preview_link,
+                            "download_link": download_link,
+                            "book_format": job.get("job_type", "story_adventure")
+                        })
+                        if result.get("success"):
+                            logger.info(f"✅ Gift delivery email sent to {gift_data.get('delivery_email')} (Job {job_id})")
+                            
+                            # Update gift status to completed
+                            self.supabase.table("gifts").update({"status": "completed"}).eq("id", gift_data.get("id")).execute()
+                        else:
+                            logger.error(f"❌ Failed to send gift delivery email: {result.get('error')}")
                     except Exception as email_error:
                         logger.error(f"❌ Failed to send gift delivery email: {email_error}")
                 
@@ -1067,24 +1089,27 @@ class BatchProcessor:
                 if child_result.data and len(child_result.data) > 0:
                     child_name = child_result.data[0].get("first_name", child_name)
             
-            # Send the email
+            # Send the email via API
             if email_service.is_enabled():
                 try:
-                    await send_book_completion(
-                        to_email=user_email,
-                        parent_name=user_name,
-                        child_name=child_name,
-                        character_name=job_data.get("character_name", "Your Character"),
-                        character_type=job_data.get("character_type", "Character"),
-                        book_title=book_title,
-                        special_ability=job_data.get("special_ability", "special powers"),
-                        book_format=job.get("job_type", "story_adventure"),
-                        preview_link=preview_link,
-                        download_link=download_link,
-                        story_world=job_data.get("story_world"),
-                        adventure_type=job_data.get("adventure_type")
-                    )
-                    logger.info(f"✅ Book completion email sent to {user_email} (Job {job_id})")
+                    result = await call_email_api("/emails/book-completion", {
+                        "to_email": user_email,
+                        "parent_name": user_name,
+                        "child_name": child_name,
+                        "character_name": job_data.get("character_name", "Your Character"),
+                        "character_type": job_data.get("character_type", "Character"),
+                        "book_title": book_title,
+                        "special_ability": job_data.get("special_ability", "special powers"),
+                        "book_format": job.get("job_type", "story_adventure"),
+                        "preview_link": preview_link,
+                        "download_link": download_link,
+                        "story_world": job_data.get("story_world"),
+                        "adventure_type": job_data.get("adventure_type")
+                    })
+                    if result.get("success"):
+                        logger.info(f"✅ Book completion email sent to {user_email} (Job {job_id})")
+                    else:
+                        logger.error(f"❌ Failed to send book completion email: {result.get('error')}")
                 except Exception as email_error:
                     logger.error(f"❌ Failed to send book completion email: {email_error}")
                 
