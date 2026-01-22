@@ -30,8 +30,7 @@ from queue_manager import QueueManager
 from batch_processor import BatchProcessor
 from validation_utils import ConsistencyValidationResult
 from audio_generator import AudioGenerator
-from email_service import email_service
-# Email queue removed - sending emails via API now
+# Email service removed - all emails go through API endpoints now
 import asyncio
 from contextlib import asynccontextmanager
 import httpx
@@ -1206,8 +1205,8 @@ async def root(request: Request):
             "jwt_expiration": f"{JWT_EXPIRATION_HOURS} hours"
         },
         "email_service": {
-            "enabled": email_service.is_enabled(),
-            "provider": "Gmail SMTP"
+            "enabled": bool(os.getenv("RESEND_API_KEY")),
+            "provider": "Resend API"
         }
     }
 
@@ -2076,7 +2075,7 @@ async def handle_subscription_deleted(subscription):
                 logger.info(f"Updated user {user_id} with cancelled subscription status")
         
         # Send subscription cancelled email via API
-        if customer_email and email_service.is_enabled():
+        if customer_email and os.getenv("RESEND_API_KEY"):
             result = await call_email_api("/emails/subscription-cancelled", {
                 "to_email": customer_email,
                 "customer_name": customer_name,
@@ -2229,11 +2228,11 @@ async def handle_payment_succeeded(invoice):
                                 logger.warning(f"Could not find user by email to update stripe_customer_id: {e}")
             
             # Send payment success email via API
-            logger.info(f"Attempting to send payment success email - Email: {customer_email}, Service enabled: {email_service.is_enabled()}")
+            logger.info(f"Attempting to send payment success email - Email: {customer_email}, Service enabled: {bool(os.getenv('RESEND_API_KEY'))}")
             
             if not customer_email:
                 logger.warning("Cannot send payment success email: customer_email is missing")
-            elif not email_service.is_enabled():
+            elif not os.getenv("RESEND_API_KEY"):
                 logger.warning("Cannot send payment success email: email service not enabled")
             else:
                 try:
@@ -2337,11 +2336,11 @@ async def handle_payment_failed(invoice):
                 }).eq("stripe_subscription_id", subscription_id).execute()
             
             # Send payment failed email via API
-            logger.info(f"Attempting to send payment failed email - Email: {customer_email}, Service enabled: {email_service.is_enabled()}")
+            logger.info(f"Attempting to send payment failed email - Email: {customer_email}, Service enabled: {bool(os.getenv('RESEND_API_KEY'))}")
             
             if not customer_email:
                 logger.warning("Cannot send payment failed email: customer_email is missing")
-            elif not email_service.is_enabled():
+            elif not os.getenv("RESEND_API_KEY"):
                 logger.warning("Cannot send payment failed email: email service not enabled")
             else:
                 try:
@@ -2486,7 +2485,7 @@ async def deliver_gift_endpoint(request: Request):
         logger.info(f"✅ Gift {gift_id} delivered successfully via web push notification")
         
         # Also send delivery email if enabled
-        if email_service.is_enabled():
+        if os.getenv("RESEND_API_KEY"):
             try:
                 # Get sender information
                 sender_id = gift.get("from_user_id")
@@ -2578,7 +2577,7 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
             # Get user's name for the email
             customer_name = name if name else None
             
-            if email_service.is_enabled():
+            if os.getenv("RESEND_API_KEY"):
                 try:
                     result = await call_email_api("/emails/welcome", {
                         "to_email": email,

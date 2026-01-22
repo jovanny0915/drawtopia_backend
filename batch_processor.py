@@ -988,8 +988,7 @@ class BatchProcessor:
                 logger.warning("Supabase not available, skipping book completion email")
                 return
             
-            # Import email service to check if enabled
-            from email_service import email_service
+            # Check if email service is enabled via API key
             
             # Get user and child profile information
             user_id = job.get("user_id")
@@ -1040,7 +1039,7 @@ class BatchProcessor:
                     giver_name = f"{giver.get('first_name', '')} {giver.get('last_name', '')}".strip() or giver_name
                 
                 # Send gift delivery email via API
-                if email_service.is_enabled():
+                if os.getenv("RESEND_API_KEY"):
                     try:
                         result = await call_email_api("/emails/gift-delivery", {
                             "to_email": gift_data.get("delivery_email"),
@@ -1090,7 +1089,7 @@ class BatchProcessor:
                     child_name = child_result.data[0].get("first_name", child_name)
             
             # Send the email via API
-            if email_service.is_enabled():
+            if os.getenv("RESEND_API_KEY"):
                 try:
                     result = await call_email_api("/emails/book-completion", {
                         "to_email": user_email,
