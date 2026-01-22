@@ -1831,7 +1831,6 @@ async def cancel_subscription(request: Request, cancel_request: CancelSubscripti
             # Update database
             supabase.table("subscriptions").update({
                 "status": "cancelled",
-                "cancel_at_period_end": True,
                 "cancelled_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("stripe_subscription_id", stripe_subscription_id).execute()
@@ -2032,7 +2031,7 @@ async def handle_checkout_completed(session):
                 "stripe_subscription_id": subscription_id,
                 "customer_email": customer_email,
                 "status": subscription.status,
-                "plan_type": "dddddddd", # price_type,
+                "plan_type": "monthly", # price_type,
                 "current_period_start": current_period_start_iso or datetime.utcnow().isoformat() + "Z",
                 "current_period_end": current_period_end_iso or datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
                 "created_at": datetime.utcnow().isoformat()
