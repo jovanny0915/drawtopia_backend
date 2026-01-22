@@ -1580,6 +1580,16 @@ class CustomerPortalResponse(BaseModel):
     portal_url: Optional[str] = None
     message: Optional[str] = None
 
+class CancelSubscriptionRequest(BaseModel):
+    """Request model for cancelling a subscription"""
+    stripe_subscription_id: str
+
+class CancelSubscriptionResponse(BaseModel):
+    """Response model for subscription cancellation"""
+    success: bool
+    message: Optional[str] = None
+    access_until: Optional[str] = None
+
 
 @app.post("/api/stripe/create-onetime-checkout", response_model=SubscriptionResponse)
 async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
@@ -1738,6 +1748,157 @@ async def create_customer_portal(user_id: str, return_url: Optional[str] = None)
     except Exception as e:
         logger.error(f"Error creating customer portal: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create customer portal: {str(e)}")
+
+
+@app.post("/api/subscriptions/cancel", response_model=CancelSubscriptionResponse)
+@limiter.limit("10/minute")
+async def cancel_subscription(request: Request, cancel_request: CancelSubscriptionRequest):
+    """
+    Cancel a subscription via Stripe API.
+    Requires authentication via Bearer token.
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    
+    try:
+        # Extract user ID from authorization token
+        authorization = request.headers.get("Authorization")
+        user_id = extract_user_from_token(authorization)
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required. Please provide a valid Bearer token."
+            )
+        
+        stripe_subscription_id = cancel_request.stripe_subscription_id
+        
+        # Verify the subscription belongs to this user
+        subscription_result = supabase.table("subscriptions").select(
+            "id, user_id, stripe_customer_id, status, customer_email"
+        ).eq("stripe_subscription_id", stripe_subscription_id).execute()
+        
+        if not subscription_result.data or len(subscription_result.data) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Subscription not found"
+            )
+        
+        subscription_data = subscription_result.data[0]
+        
+        # Verify ownership
+        if subscription_data.get("user_id") != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have permission to cancel this subscription"
+            )
+        
+        # Check if already cancelled
+        if subscription_data.get("status") in ["cancelled", "canceled"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Subscription is already cancelled"
+            )
+        
+        # Cancel the subscription in Stripe (at period end)
+        try:
+            stripe_subscription = stripe.Subscription.modify(
+                stripe_subscription_id,
+                cancel_at_period_end=True
+            )
+            
+            logger.info(f"Cancelled subscription {stripe_subscription_id} for user {user_id}")
+            
+            # Get plan type and period end
+            plan_type = "monthly"
+            access_until = None
+            current_period_end = None
+            try:
+                current_period_end = stripe_subscription.get("current_period_end")
+                if current_period_end:
+                    access_until = datetime.fromtimestamp(current_period_end).strftime("%B %d, %Y")
+                
+                if stripe_subscription.get("items", {}).get("data"):
+                    price = stripe_subscription["items"]["data"][0].get("price", {})
+                    interval = price.get("recurring", {}).get("interval", "month")
+                    plan_type = "yearly" if interval == "year" else "monthly"
+            except Exception:
+                pass
+            
+            # Update database
+            supabase.table("subscriptions").update({
+                "status": "cancelled",
+                "cancel_at_period_end": True,
+                "cancelled_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("stripe_subscription_id", stripe_subscription_id).execute()
+            
+            # Update users table
+            user_update_data = {
+                "subscription_status": "cancelled",
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            # Keep subscription_expires until period end
+            if current_period_end:
+                user_update_data["subscription_expires"] = datetime.fromtimestamp(current_period_end).isoformat() + "Z"
+            
+            supabase.table("users").update(user_update_data).eq("id", user_id).execute()
+            logger.info(f"Updated user {user_id} with cancelled subscription status")
+            
+            # Get customer email and name for email
+            customer_email = subscription_data.get("customer_email")
+            customer_name = None
+            
+            if not customer_email:
+                user_result = supabase.table("users").select("email, first_name, last_name").eq("id", user_id).execute()
+                if user_result.data and len(user_result.data) > 0:
+                    user_data = user_result.data[0]
+                    customer_email = user_data.get("email")
+                    first_name = user_data.get("first_name", "")
+                    last_name = user_data.get("last_name", "")
+                    customer_name = f"{first_name} {last_name}".strip() or None
+            
+            # Send subscription cancelled email via API
+            if customer_email and os.getenv("RESEND_API_KEY"):
+                try:
+                    result = await call_email_api("/emails/subscription-cancelled", {
+                        "to_email": customer_email,
+                        "customer_name": customer_name,
+                        "plan_type": plan_type,
+                        "access_until": access_until
+                    })
+                    if result.get("success"):
+                        logger.info(f"✅ Subscription cancelled email sent to {customer_email}")
+                    else:
+                        logger.error(f"❌ Failed to send subscription cancelled email: {result.get('error')}")
+                except Exception as email_error:
+                    logger.error(f"Error sending cancellation email: {email_error}")
+            
+            return CancelSubscriptionResponse(
+                success=True,
+                message="Subscription cancelled successfully. You'll retain access until the end of your current billing period.",
+                access_until=access_until
+            )
+            
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe error cancelling subscription: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to cancel subscription: {str(e)}"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel subscription: {str(e)}"
+        )
 
 
 @app.post("/api/stripe/webhook")
