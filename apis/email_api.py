@@ -53,8 +53,8 @@ def _load_template(template_name: str) -> str:
 async def _send_email(
     to_email: str,
     subject: str,
-    html_content: str,
-    text_content: Optional[str] = None
+    template_id: str,
+    template_data: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Send an email using Resend API
@@ -62,8 +62,8 @@ async def _send_email(
     Args:
         to_email: Recipient email address
         subject: Email subject
-        html_content: HTML body of the email
-        text_content: Plain text body (optional)
+        template_id: Resend template ID
+        template_data: Template data
     
     Returns:
         Dict with 'success' boolean and 'id' or 'error'
@@ -86,11 +86,9 @@ async def _send_email(
             "from": FROM_EMAIL_FORMATTED,
             "to": to_email,
             "subject": subject,
-            "html": html_content
+            "template_id": template_id,
+            "template_data": template_data
         }
-        
-        if text_content:
-            payload["text"] = text_content
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -125,33 +123,6 @@ async def _send_email(
     except Exception as e:
         logger.error(f"❌ Failed to send email to {to_email}: {e}")
         return {"success": False, "error": str(e)}
-
-class EmailSchema(BaseModel):
-    to: str
-    subject: str
-    body: str
-
-@router.post("/send-email")
-async def send_email(email: EmailSchema):
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "from": "noreply@email.drawtopia.ai",  # Use your verified domain email
-        "to": email.to,
-        "subject": email.subject,
-        "html": email.body
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(RESEND_API_URL, json=payload, headers=headers)
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=response.text)
-
-    return {"message": "Email sent successfully"}
 
 
 @router.post("/emails/welcome")
@@ -188,38 +159,8 @@ async def send_welcome_email_endpoint(request: Request):
         name = customer_name or "there"
         subject = "🎉 Welcome to Drawtopia - Let's Create Something Amazing!"
         
-        html_content = _load_template("welcome.html").format(
-            name=name,
-            frontend_url=FRONTEND_URL,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Welcome to Drawtopia!
-
-Hi {name},
-
-We're thrilled to have you join our creative community! Your account has been created successfully and you're ready to start creating amazing AI-powered artwork.
-
-What you can do with Drawtopia:
-• Transform your ideas into stunning AI artwork
-• Create illustrated stories with AI assistance
-• Explore different artistic styles and templates
-• Save and share your creative masterpieces
-
-Ready to unleash your creativity? Visit: {FRONTEND_URL}
-
-Pro Tip: Check out our Premium plans for unlimited generations and exclusive features!
-{FRONTEND_URL}/pricing
-
-Have questions? Just reply to this email!
-
-© {datetime.now().year} Drawtopia
-Made with 💜 for creative minds everywhere
-"""
-        
         # Send welcome email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(to_email, subject, template_id="32f0f93c-cf7e-42d0-87af-35295c1e08f2", template_data={"name": name, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
