@@ -2387,47 +2387,10 @@ async def handle_payment_succeeded(invoice):
                             except Exception as e:
                                 logger.warning(f"Could not find user by email to update stripe_customer_id: {e}")
             
-            # Send payment success email via API
-            logger.info(f"Attempting to send payment success email - Email: {customer_email}, Service enabled: {bool(os.getenv('RESEND_API_KEY'))}")
-            
-            if not customer_email:
-                logger.warning("Cannot send payment success email: customer_email is missing")
-            elif not os.getenv("RESEND_API_KEY"):
-                logger.warning("Cannot send payment success email: email service not enabled")
-            else:
-                try:
-                    amount_display = f"${amount_paid / 100:.2f}" if amount_paid else None
-                    
-                    # Send payment success email via API
-                    result = await call_email_api("/emails/payment-success", {
-                        "to_email": customer_email,
-                        "customer_name": customer_name,
-                        "plan_type": plan_type,
-                        "amount": amount_display,
-                        "next_billing_date": next_billing_date
-                    })
-                    if result.get("success"):
-                        logger.info(f"✅ Payment success email sent to {customer_email}")
-                    else:
-                        logger.error(f"❌ Failed to send payment success email: {result.get('error')}")
-                    
-                    # Also send receipt email via API
-                    receipt_result = await call_email_api("/emails/receipt", {
-                        "to_email": customer_email,
-                        "customer_name": customer_name or "Customer",
-                        "transaction_id": invoice.get("id", "N/A"),
-                        "items": [{"name": f"{plan_type.capitalize()} Subscription", "amount": amount_paid / 100}],
-                        "subtotal": amount_paid / 100,
-                        "tax": 0,
-                        "total": amount_paid / 100,
-                        "transaction_date": datetime.utcnow().isoformat()
-                    })
-                    if receipt_result.get("success"):
-                        logger.info(f"✅ Receipt email sent to {customer_email}")
-                    else:
-                        logger.error(f"❌ Failed to send receipt email: {receipt_result.get('error')}")
-                except Exception as email_error:
-                    logger.error(f"❌ Exception sending payment success email: {email_error}")
+            # Note: Payment confirmation emails are now sent from the frontend after successful payment
+            # The frontend will call /api/stripe/session/{session_id} to get payment details
+            # and then send emails via /api/emails/payment-success and /api/emails/receipt
+            logger.info(f"Payment succeeded - Email: {customer_email}, Amount: ${amount_paid / 100:.2f if amount_paid else 0:.2f}")
                 
     except Exception as e:
         logger.error(f"Error handling payment succeeded: {e}")
@@ -2538,6 +2501,84 @@ async def get_stripe_config():
         "monthly_price_id": STRIPE_PRICE_ID_MONTHLY,
         "yearly_price_id": STRIPE_PRICE_ID_YEARLY
     }
+
+
+@app.get("/api/stripe/session/{session_id}")
+async def get_checkout_session(session_id: str):
+    """
+    Get Stripe checkout session details for frontend to retrieve payment information.
+    This allows the frontend to get payment details and send confirmation emails.
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    
+    try:
+        # Retrieve the checkout session from Stripe
+        session = stripe.checkout.Session.retrieve(session_id)
+        
+        # Extract relevant information
+        mode = session.get("mode")  # "payment" or "subscription"
+        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+        customer_name = session.get("customer_details", {}).get("name")
+        payment_status = session.get("payment_status")
+        
+        # Get amount and currency
+        amount_total = session.get("amount_total", 0)
+        currency = session.get("currency", "usd")
+        amount_display = f"${amount_total / 100:.2f}" if amount_total else None
+        
+        # For subscriptions, get plan details
+        plan_type = None
+        next_billing_date = None
+        subscription_id = session.get("subscription")
+        
+        if mode == "subscription" and subscription_id:
+            try:
+                subscription = stripe.Subscription.retrieve(subscription_id)
+                # Get plan type from price interval
+                if subscription.get("items", {}).get("data"):
+                    price = subscription["items"]["data"][0].get("price", {})
+                    interval = price.get("recurring", {}).get("interval", "month")
+                    plan_type = "yearly" if interval == "year" else "monthly"
+                
+                # Get next billing date
+                current_period_end = subscription.get("current_period_end")
+                if current_period_end:
+                    next_billing_date = datetime.fromtimestamp(current_period_end).strftime("%B %d, %Y")
+            except Exception as e:
+                logger.warning(f"Could not retrieve subscription details: {e}")
+        
+        # For one-time payments, determine purchase type from metadata
+        purchase_type = None
+        if mode == "payment":
+            metadata = session.get("metadata", {})
+            purchase_type = metadata.get("purchase_type", "single_story")
+        
+        # Get invoice ID if available
+        invoice_id = session.get("invoice")
+        
+        return {
+            "success": True,
+            "mode": mode,
+            "customer_email": customer_email,
+            "customer_name": customer_name,
+            "payment_status": payment_status,
+            "amount": amount_display,
+            "currency": currency,
+            "plan_type": plan_type,
+            "next_billing_date": next_billing_date,
+            "purchase_type": purchase_type,
+            "subscription_id": subscription_id,
+            "invoice_id": invoice_id,
+            "session_id": session_id
+        }
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error retrieving session: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error retrieving checkout session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve session: {str(e)}")
 
 
 # ==================== USER AUTH SYNC ====================
