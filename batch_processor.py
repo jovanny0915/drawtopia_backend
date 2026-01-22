@@ -109,9 +109,7 @@ class BatchProcessor:
             if success:
                 self.queue_manager.update_job_status(job_id, JobStatus.COMPLETED)
                 logger.info(f"Job {job_id} completed successfully")
-                
-                # Send book completion email
-                await self._send_book_completion_email(job_id, job, job_data)
+                # Note: Book completion email is now sent from the frontend after successful story generation
             else:
                 # Check if we should retry
                 if job["retry_count"] < job["max_retries"]:
