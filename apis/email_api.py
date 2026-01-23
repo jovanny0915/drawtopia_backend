@@ -324,7 +324,18 @@ async def send_payment_success_email_endpoint(request: Request):
         next_billing_row = f'<tr><td style="color: #718096; padding: 8px 0;">Next billing</td><td style="color: #1a1a2e; text-align: right;">{next_billing_date}</td></tr>' if next_billing_date else ''
           
         # Send payment success email
-        result = await _send_email(to_email, template_id="premium-subscription-confirmation", template_data={"name": name, "plan_display": plan_display, "amount_display": amount_display, "next_billing_row": next_billing_row, "frontend_url": FRONTEND_URL, "current_year": str(datetime.now().year)})
+        result = await _send_email(
+            to_email, 
+            template_id="premium-subscription-confirmation", 
+            template_data={
+                "name": name, 
+                "plan_display": plan_display, 
+                "amount_display": amount_display, 
+                "next_billing_row": next_billing_row, 
+                "frontend_url": FRONTEND_URL, 
+                "current_year": str(datetime.now().year)
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -659,7 +670,7 @@ async def send_receipt_email_endpoint(request: Request):
                 "items": items,
                 "subtotal": subtotal_final,
                 "tax": tax,
-                "total": total_final,
+                "total": str(total_final),
                 "current_year": str(datetime.now().year)
             }
         )
