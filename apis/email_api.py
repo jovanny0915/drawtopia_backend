@@ -86,7 +86,7 @@ async def _send_email(
             }
         }
         
-        response = resend.Email.send(payload)
+        response = resend.Emails.send(payload)
 
         logger.info(f"✅ Email sent successfully to {to_email} (ID: {response})")
         
