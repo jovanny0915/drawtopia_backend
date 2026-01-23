@@ -50,6 +50,60 @@ def _load_template(template_name: str) -> str:
         logger.error(f"Error loading template {template_name}: {e}")
         raise
 
+# Helper function to send subscription cancelled email directly (without Request object)
+async def send_subscription_cancelled_email_direct(
+    to_email: str,
+    customer_name: Optional[str] = None,
+    plan_type: str = "monthly",
+    access_until: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Send subscription cancellation email directly without requiring a Request object.
+    This is a helper function for internal use to avoid HTTP connection issues.
+    """
+    try:
+        if not to_email:
+            return {"success": False, "error": "Missing required field: to_email"}
+        
+        # Validate email format
+        to_email = to_email.strip().lower()
+        if "@" not in to_email or "." not in to_email.split("@")[1]:
+            return {"success": False, "error": "Invalid email address format"}
+        
+        if not is_email_enabled():
+            return {"success": False, "error": "Email service not available"}
+        
+        # Generate email content
+        name = customer_name or "there"
+        plan_display = "Monthly" if plan_type == "monthly" else "Yearly"
+        access_info = f"Your premium access will remain active until <strong>{access_until}</strong>." if access_until else "Your premium access has been deactivated."
+        
+        # Send subscription cancelled email
+        result = await _send_email(
+            to_email, 
+            template_id="subscription-cancellation-notice", 
+            template_data={
+                "name": name,
+                "plan_display": plan_display,
+                "access_info": access_info,
+                "FRONTEND_URL": FRONTEND_URL,
+                "current_year": str(datetime.now().year)
+            }
+        )
+        
+        if not result.get("success", False):
+            error_msg = result.get("error", "Unknown error sending email")
+            logger.error(f"❌ Failed to send subscription cancelled email to {to_email}: {error_msg}")
+            return {"success": False, "error": error_msg}
+        
+        logger.info(f"✅ Subscription cancelled email sent to {to_email} (ID: {result.get('id', 'N/A')})")
+        return {"success": True, "message": "Subscription cancelled email sent", "email_id": result.get("id")}
+        
+    except Exception as e:
+        logger.error(f"Error sending subscription cancelled email: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # Helper function to send email via Resend API
 async def _send_email(
     to_email: str,

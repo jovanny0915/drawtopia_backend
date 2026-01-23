@@ -1861,21 +1861,25 @@ async def cancel_subscription(request: Request, cancel_request: CancelSubscripti
                     last_name = user_data.get("last_name", "")
                     customer_name = f"{first_name} {last_name}".strip() or None
             
-            # Send subscription cancelled email via API
-            if customer_email and os.getenv("RESEND_API_KEY"):
+            # Send subscription cancelled email directly (avoid HTTP connection issues)
+            if customer_email:
                 try:
-                    result = await call_email_api("/emails/subscription-cancelled", {
-                        "to_email": customer_email,
-                        "customer_name": customer_name,
-                        "plan_type": plan_type,
-                        "access_until": access_until
-                    })
+                    # Call the email helper function directly instead of making HTTP call
+                    result = await email_api.send_subscription_cancelled_email_direct(
+                        to_email=customer_email,
+                        customer_name=customer_name,
+                        plan_type=plan_type,
+                        access_until=access_until
+                    )
                     if result.get("success"):
                         logger.info(f"✅ Subscription cancelled email sent to {customer_email}")
                     else:
-                        logger.error(f"❌ Failed to send subscription cancelled email: {result.get('error')}")
+                        error_msg = result.get("error", "Unknown error")
+                        logger.error(f"❌ Failed to send subscription cancelled email: {error_msg}")
                 except Exception as email_error:
                     logger.error(f"Error sending cancellation email: {email_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
             
             return CancelSubscriptionResponse(
                 success=True,
@@ -2234,18 +2238,25 @@ async def handle_subscription_deleted(subscription):
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
                 logger.info(f"Updated user {user_id} with cancelled subscription status")
         
-        # Send subscription cancelled email via API
-        if customer_email and os.getenv("RESEND_API_KEY"):
-            result = await call_email_api("/emails/subscription-cancelled", {
-                "to_email": customer_email,
-                "customer_name": customer_name,
-                "plan_type": plan_type,
-                "access_until": access_until
-            })
-            if result.get("success"):
-                logger.info(f"✅ Subscription cancelled email sent to {customer_email}")
-            else:
-                logger.error(f"❌ Failed to send subscription cancelled email: {result.get('error')}")
+        # Send subscription cancelled email directly (avoid HTTP connection issues)
+        if customer_email:
+            try:
+                # Call the email helper function directly instead of making HTTP call
+                result = await email_api.send_subscription_cancelled_email_direct(
+                    to_email=customer_email,
+                    customer_name=customer_name,
+                    plan_type=plan_type,
+                    access_until=access_until
+                )
+                if result.get("success"):
+                    logger.info(f"✅ Subscription cancelled email sent to {customer_email}")
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    logger.error(f"❌ Failed to send subscription cancelled email: {error_msg}")
+            except Exception as email_error:
+                logger.error(f"Error sending cancellation email: {email_error}")
+                import traceback
+                logger.error(traceback.format_exc())
             
     except Exception as e:
         logger.error(f"Error handling subscription deleted: {e}")
