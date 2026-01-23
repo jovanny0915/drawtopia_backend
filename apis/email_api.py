@@ -140,32 +140,24 @@ async def _send_email(
             }
         }
         
+        # Resend SDK returns a dict directly, not a response object
         response = resend.Emails.send(payload)
 
-        logger.info(f"✅ Email sent successfully to {to_email} (ID: {response})")
-        
-        if response.status_code in [200, 201]:
-            try:
-                response_data = response.json()
-                email_id = response_data.get("id", f"resend_{datetime.now().timestamp()}")
-                logger.info(f"✅ Email sent successfully to {to_email} (ID: {email_id})")
-                return {"success": True, "id": email_id}
-            except Exception:
-                email_id = f"resend_{datetime.now().timestamp()}"
-                logger.info(f"✅ Email sent successfully to {to_email} (ID: {email_id})")
-                return {"success": True, "id": email_id}
+        # Check if response is a dict with an 'id' field (success)
+        if isinstance(response, dict) and "id" in response:
+            email_id = response.get("id", f"resend_{datetime.now().timestamp()}")
+            logger.info(f"✅ Email sent successfully to {to_email} (ID: {email_id})")
+            return {"success": True, "id": email_id}
+        # Check if response is a dict with an 'message' or 'error' field (error)
+        elif isinstance(response, dict):
+            error_message = response.get("message") or response.get("error") or "Unknown error from Resend API"
+            logger.error(f"❌ Resend API error sending email to {to_email}: {error_message}")
+            return {"success": False, "error": f"Resend API error: {error_message}"}
         else:
-            try:
-                error_data = response.json()
-                error_message = error_data.get("message", response.text)
-            except:
-                error_message = response.text
-            logger.error(f"❌ Resend API error sending email to {to_email}: {response.status_code} - {error_message}")
-            return {"success": False, "error": f"Resend API error ({response.status_code}): {error_message}"}
+            # Fallback for unexpected response type
+            logger.error(f"❌ Unexpected response type from Resend API: {type(response)}")
+            return {"success": False, "error": f"Unexpected response type from Resend API: {type(response)}"}
             
-    except httpx.HTTPError as e:
-        logger.error(f"❌ HTTP error sending email to {to_email}: {e}")
-        return {"success": False, "error": f"HTTP error: {str(e)}"}
     except Exception as e:
         logger.error(f"❌ Failed to send email to {to_email}: {e}")
         return {"success": False, "error": str(e)}
@@ -722,8 +714,8 @@ async def send_receipt_email_endpoint(request: Request):
                 "transaction_id": transaction_id,
                 "transaction_date": transaction_date_final.strftime('%B %d, %Y'),
                 "items": items,
-                "subtotal": subtotal_final,
-                "tax": tax,
+                "subtotal": str(subtotal_final),
+                "tax": str(tax),
                 "total": str(total_final),
                 "current_year": str(datetime.now().year)
             }
