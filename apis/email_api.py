@@ -85,9 +85,10 @@ async def _send_email(
         payload = {
             "from": FROM_EMAIL_FORMATTED,
             "to": to_email,
-            "subject": subject,
-            "template_id": template_id,
-            "template_data": template_data
+            "template": {
+                "id": template_id,
+                "variables": template_data
+            }
         }
         
         async with httpx.AsyncClient() as client:
@@ -160,7 +161,7 @@ async def send_welcome_email_endpoint(request: Request):
         subject = "🎉 Welcome to Drawtopia - Let's Create Something Amazing!"
         
         # Send welcome email
-        result = await _send_email(to_email, subject, template_id="32f0f93c-cf7e-42d0-87af-35295c1e08f2", template_data={"name": name, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
+        result = await _send_email(to_email, subject, template_id="welcome-notification", template_data={"name": name, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
