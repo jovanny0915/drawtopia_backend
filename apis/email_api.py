@@ -152,7 +152,7 @@ async def send_welcome_email_endpoint(request: Request):
         subject = "🎉 Welcome to Drawtopia - Let's Create Something Amazing!"
         
         # Send welcome email
-        result = await _send_email(to_email, subject, template_id="welcome-notification", template_data={"name": name, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
+        result = await _send_email(to_email, template_id="welcome-notification", template_data={"name": name, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
