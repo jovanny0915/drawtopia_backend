@@ -201,38 +201,8 @@ async def send_parental_consent_email_endpoint(request: Request):
         consent_token = str(uuid.uuid4())
         consent_link = f"{FRONTEND_URL}/consent/verify?token={consent_token}"
         
-        # Generate email content
-        subject = f"Verify your account on Drawtopia — Help {child_name} create magical stories"
-        
-        html_content = _load_template("parental_consent.html").format(
-            parent_name=parent_name,
-            child_name=child_name,
-            consent_link=consent_link,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Verify your account on Drawtopia — Help {child_name} create magical stories
-
-Hi {parent_name},
-
-Welcome to Drawtopia! 🎨✨
-
-{child_name}'s caregiver has started setting up an account on Drawtopia, a platform that transforms children's drawings into personalized storybooks.
-
-To complete the setup, we need you to verify that you consent to collect {child_name}'s information. This is required by law (COPPA compliance) and helps us keep their data safe.
-
-Verify Consent: {consent_link}
-
-⏰ This link expires in 48 hours
-
-Questions? Reply to this email or contact hello@drawtopia.ai
-
-© {datetime.now().year} Drawtopia
-"""
-        
         # Send the email
-        result = await _send_email(parent_email, subject, html_content, text_content)
+        result = await _send_email(parent_email, template_id="parental-consent-request", template_data={"parent_name": parent_name, "child_name": child_name, "consent_link": consent_link, "current_year": datetime.now().year})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
@@ -280,7 +250,6 @@ async def send_gift_notification_email_endpoint(request: Request):
             )
         
         # Generate email content
-        subject = "You've been sent a gift on Drawtopia! 🎁✨"
         delivery_method = body.get("delivery_method", "immediate_email")
         
         delivery_info = ""
@@ -291,45 +260,8 @@ async def send_gift_notification_email_endpoint(request: Request):
         else:
             delivery_info = f"{giver_name} is asking a grown-up in your life to help create your story. Ask them to check their email for the creation link."
         
-        html_content = _load_template("gift_notification.html").format(
-            recipient_name=recipient_name,
-            giver_name=giver_name,
-            occasion=occasion,
-            gift_message=gift_message,
-            delivery_info=delivery_info,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-You've been sent a gift on Drawtopia! 🎁✨
-
-Hi {recipient_name},
-
-You're about to receive a very special gift! 🎉
-
-{giver_name} is creating a personalized storybook just for you!
-
-About Your Gift:
-- Occasion: {occasion}
-- Message from {giver_name}: "{gift_message}"
-- Status: Being created with your character...
-
-{delivery_info}
-
-How It Works:
-1. Your grown-up creates your character
-2. We generate a magical story featuring YOU
-3. You read your personalized adventure!
-
-We can't wait for you to meet your character! 🌟
-
-Questions? Reply to this email or contact hello@drawtopia.ai
-
-© {datetime.now().year} Drawtopia
-"""
-        
         # Send the email
-        result = await _send_email(recipient_email, subject, html_content, text_content)
+        result = await _send_email(recipient_email, template_id="gift-notification", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": datetime.now().year})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
@@ -388,47 +320,11 @@ async def send_payment_success_email_endpoint(request: Request):
         name = customer_name or "there"
         plan_display = "Monthly" if plan_type == "monthly" else "Yearly"
         amount_display = amount or ("$9.99" if plan_type == "monthly" else "$99.99")
-        subject = "🎉 Payment Successful - Welcome to Drawtopia Premium!"
         
         next_billing_row = f'<tr><td style="color: #718096; padding: 8px 0;">Next billing</td><td style="color: #1a1a2e; text-align: right;">{next_billing_date}</td></tr>' if next_billing_date else ''
-        
-        html_content = _load_template("payment_success.html").format(
-            name=name,
-            plan_display=plan_display,
-            amount_display=amount_display,
-            next_billing_row=next_billing_row,
-            frontend_url=FRONTEND_URL,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Payment Successful - Welcome to Drawtopia Premium!
-
-Hi {name},
-
-Thank you for subscribing to Drawtopia Premium! Your payment has been processed successfully.
-
-Payment Details:
-- Plan: {plan_display}
-- Amount: {amount_display}
-- Status: Paid
-{f'- Next billing: {next_billing_date}' if next_billing_date else ''}
-
-Your premium features are now active! You have unlimited access to:
-• Unlimited AI image generations
-• Priority processing
-• Advanced story creation tools
-• Premium templates and styles
-
-Start creating: {FRONTEND_URL}
-
-Questions? Just reply to this email!
-
-© {datetime.now().year} Drawtopia
-"""
-        
+          
         # Send payment success email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(to_email, template_id="premium-subscription-confirmation", template_data={"name": name, "plan_display": plan_display, "amount_display": amount_display, "next_billing_row": next_billing_row, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -489,44 +385,18 @@ async def send_payment_failed_email_endpoint(request: Request):
         plan_display = "Monthly" if plan_type == "monthly" else "Yearly"
         amount_display = amount or ("$9.99" if plan_type == "monthly" else "$99.99")
         update_url = retry_url or f"{FRONTEND_URL}/account"
-        subject = "⚠️ Payment Failed - Action Required"
-        
-        html_content = _load_template("payment_failed.html").format(
-            name=name,
-            plan_display=plan_display,
-            amount_display=amount_display,
-            update_url=update_url,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Payment Failed - Action Required
 
-Hi {name},
-
-We were unable to process your payment for your Drawtopia subscription.
-
-This could be due to:
-• Insufficient funds
-• Expired card
-• Card declined by your bank
-
-Payment Details:
-- Plan: {plan_display}
-- Amount: {amount_display}
-- Status: Failed
-
-To keep your premium access, please update your payment method within the next 7 days.
-
-Update payment: {update_url}
-
-Need help? Reply to this email!
-
-© {datetime.now().year} Drawtopia
-"""
-        
         # Send payment failed email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(
+            to_email, template_id="payment-failed-notice", 
+            template_data={
+                "name": name, 
+                "plan_display": plan_display,
+                "amount_display": amount_display,
+                "update_url": update_url,
+                "current_year": datetime.now().year
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -585,40 +455,19 @@ async def send_subscription_cancelled_email_endpoint(request: Request):
         name = customer_name or "there"
         plan_display = "Monthly" if plan_type == "monthly" else "Yearly"
         access_info = f"Your premium access will remain active until <strong>{access_until}</strong>." if access_until else "Your premium access has been deactivated."
-        subject = "Your Drawtopia Subscription Has Been Cancelled"
-        
-        html_content = _load_template("subscription_cancelled.html").format(
-            name=name,
-            plan_display=plan_display,
-            access_info=access_info,
-            frontend_url=FRONTEND_URL,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Your Drawtopia Subscription Has Been Cancelled
-
-Hi {name},
-
-We're sorry to see you go! Your {plan_display} subscription to Drawtopia has been cancelled.
-
-{access_info.replace('<strong>', '').replace('</strong>', '')}
-
-What happens next?
-• You can continue using free features
-• Your created content remains accessible
-• You can resubscribe anytime
-
-We'd love to have you back! If you change your mind, resubscribe at:
-{FRONTEND_URL}/pricing
-
-Was this a mistake? Reply to this email and we'll help!
-
-© {datetime.now().year} Drawtopia
-"""
         
         # Send subscription cancelled email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(
+            to_email, 
+            template_id="subscription-cancellation-notice", 
+            template_data={
+                "name": name,
+                "plan_display": plan_display,
+                "access_info": access_info,
+                "FRONTEND_URL": FRONTEND_URL,
+                "current_year": datetime.now().year
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -689,42 +538,23 @@ async def send_subscription_renewal_reminder_email_endpoint(request: Request):
         
         # Generate email content
         renewal_date_final = renewal_date_obj or datetime.utcnow()
-        subject = f"Your Drawtopia subscription renews on {renewal_date_final.strftime('%B %d')}"
-        
-        html_content = _load_template("subscription_renewal_reminder.html").format(
-            customer_name=customer_name,
-            plan_type=plan_type,
-            renewal_date=renewal_date_final.strftime('%B %d, %Y'),
-            renewal_amount=f"{renewal_amount:.2f}",
-            manage_link=manage_link or f"{FRONTEND_URL}/account",
-            cancel_link=cancel_link or f"{FRONTEND_URL}/account",
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Your Drawtopia subscription renews on {renewal_date_final.strftime('%B %d')}
-
-Hi {customer_name},
-
-This is a friendly reminder that your {plan_type} subscription to Drawtopia will automatically renew on {renewal_date_final.strftime('%B %d, %Y')}.
-
-Renewal Details:
-- Plan: {plan_type}
-- Renewal Date: {renewal_date_final.strftime('%B %d, %Y')}
-- Amount: ${renewal_amount:.2f}
-
-No action is needed! Your subscription will renew automatically.
-
-Manage Subscription: {manage_link or f'{FRONTEND_URL}/account'}
-Cancel Subscription: {cancel_link or f'{FRONTEND_URL}/account'}
-
-Questions? Reply to this email!
-
-© {datetime.now().year} Drawtopia
-"""
         
         # Send subscription renewal reminder email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(
+            to_email, 
+            template_id="",
+            template_data={
+                "customer_name": customer_name,
+                "plan_type": plan_type,
+                "renewal_date": renewal_date,
+                "renewal_amount": renewal_amount,
+                "renewal_date_final": renewal_date_final,
+                "manage_link": manage_link,
+                "cancel_link": cancel_link,
+                "FRONTEND_URL": FRONTEND_URL,
+                "current_year": datetime.now().year
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -855,6 +685,13 @@ Need help? Reply to this email or contact hello@drawtopia.ai
         
         # Send receipt email
         result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(
+            to_email,
+            template_id="",
+            template_data={
+
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -919,17 +756,14 @@ async def send_book_completion_email_endpoint(request: Request):
         
         # Generate email content
         if book_format == 'interactive_search':
-            subject = f"{character_name}'s Enchanted Forest Adventure is ready! 🎮"
             format_description = "an 8-scene Where's Waldo-style adventure in the Enchanted Forest"
             format_details = f"""
                 <li>Format: Interactive Search (Where's Waldo style)</li>
                 <li>Scenes: 4 magical locations</li>
                 <li>Character: {character_name} ({character_type})</li>
                 <li>Special Ability: {special_ability}</li>
-                <li>Reading Time: ~15-20 minutes</li>
-"""
+                <li>Reading Time: ~15-20 minutes</li>"""
         else:
-            subject = f"{character_name}'s Magical Adventure is here! 📖✨"
             format_description = f"a 5-page adventure where {character_name} the {character_type} uses their special power"
             format_details = f"""
                 <li>Format: Story Adventure (5-page narrative)</li>
@@ -938,49 +772,23 @@ async def send_book_completion_email_endpoint(request: Request):
                 <li>Special Ability: {special_ability}</li>
                 <li>World: {story_world or 'Magical World'}</li>
                 <li>Adventure Type: {adventure_type or 'Epic Quest'}</li>
-                <li>Reading Time: ~10 minutes</li>
-"""
-        
-        html_content = _load_template("book_completion.html").format(
-            character_name=character_name,
-            parent_name=parent_name,
-            child_name=child_name,
-            book_title=book_title,
-            format_description=format_description,
-            preview_link=preview_link,
-            download_link=download_link,
-            format_details=format_details,
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-{character_name}'s story is ready!
-
-Hi {parent_name},
-
-Great news! 🎉 {character_name}'s story is ready!
-
-{child_name} created "{book_title}" — {format_description}.
-
-📖 Start Reading: {preview_link}
-💾 Download PDF: {download_link}
-
-Story Details:
-- Character: {character_name} ({character_type})
-- Special Ability: {special_ability}
-- Reading Time: ~{'15-20' if book_format == 'interactive_search' else '10'} minutes
-
-{child_name} will love seeing their drawing come to life!
-
-💡 This book is available for 30 days. Download it now to keep forever!
-
-Happy reading! 📚
-
-© {datetime.now().year} Drawtopia
-"""
+                <li>Reading Time: ~10 minutes</li>"""
         
         # Send book completion email
-        result = await _send_email(to_email, subject, html_content, text_content)
+        result = await _send_email(
+            to_email,
+            template_id="story-creation-notification",
+            template_data={
+                "child_name": child_name,
+                "parent_name": parent_name,
+                "book_title": book_title,
+                "format_description": format_description,
+                "format_details": format_details,
+                "preview_link": preview_link,
+                "download_link": download_link,
+                "current_year": datetime.now().year
+            }
+        )
         
         # Check if email was sent successfully
         if not result.get("success", False):
