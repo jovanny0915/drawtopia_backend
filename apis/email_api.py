@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 from rate_limiter import limiter
+import resend
 
 load_dotenv()
 
@@ -22,7 +23,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 # Email service enabled check
 EMAIL_ENABLED = bool(RESEND_API_KEY)
 FROM_EMAIL_FORMATTED = f"{FROM_NAME} <{FROM_EMAIL}>"
-
+resend.api_key = RESEND_API_KEY
 # Templates directory (parent directory of apis folder)
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
@@ -52,7 +53,6 @@ def _load_template(template_name: str) -> str:
 # Helper function to send email via Resend API
 async def _send_email(
     to_email: str,
-    subject: str,
     template_id: str,
     template_data: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -77,11 +77,6 @@ async def _send_email(
         return {"success": False, "error": "Resend API key not configured"}
     
     try:
-        headers = {
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
         payload = {
             "from": FROM_EMAIL_FORMATTED,
             "to": to_email,
@@ -91,13 +86,9 @@ async def _send_email(
             }
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                RESEND_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=30.0
-            )
+        response = resend.Email.send(payload)
+
+        logger.info(f"✅ Email sent successfully to {to_email} (ID: {response})")
         
         if response.status_code in [200, 201]:
             try:
