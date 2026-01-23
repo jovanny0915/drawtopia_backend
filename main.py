@@ -2141,8 +2141,12 @@ async def handle_checkout_completed(session):
                         if subscription_expires:
                             user_update_data["subscription_expires"] = subscription_expires
                     
+                    # Update credit column in users table if available from product metadata
+                    if credit is not None:
+                        user_update_data["credit"] = credit
+                    
                     supabase.table("users").update(user_update_data).eq("id", target_user_id).execute()
-                    logger.info(f"Updated user {target_user_id} with stripe_customer_id={customer_id} and subscription_status={subscription_status} from checkout completed")
+                    logger.info(f"Updated user {target_user_id} with stripe_customer_id={customer_id}, subscription_status={subscription_status}, and credit={credit} from checkout completed")
                 except Exception as e:
                     logger.error(f"Error updating user stripe_customer_id in checkout completed: {e}")
             elif customer_id:
@@ -2209,8 +2213,12 @@ async def handle_subscription_created(subscription):
                     "subscription_expires": subscription_expires
                 }
                 
+                # Update credit column in users table if available from product metadata
+                if credit is not None:
+                    user_update_data["credit"] = credit
+                
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
-                logger.info(f"Updated user {user_id} with subscription info from subscription created event (status: {user_subscription_status})")
+                logger.info(f"Updated user {user_id} with subscription info from subscription created event (status: {user_subscription_status}, credit: {credit})")
                 
     except Exception as e:
         logger.error(f"Error handling subscription created: {e}")
