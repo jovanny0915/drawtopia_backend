@@ -1960,6 +1960,65 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=500, detail=f"Webhook processing error: {str(e)}")
 
 
+async def get_credits_from_price(price_id: str) -> int:
+    """
+    Retrieve credits from Stripe price metadata.
+    Returns the credit amount from price metadata, or 0 if not found.
+    """
+    try:
+        if not price_id:
+            return 0
+        
+        price = stripe.Price.retrieve(price_id)
+        price_metadata = price.get("metadata", {})
+        
+        # Try to get credit from metadata
+        credit_str = price_metadata.get("credit")
+        if credit_str:
+            try:
+                credit = int(credit_str)
+                logger.info(f"Found {credit} credits in price {price_id} metadata")
+                return credit
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid credit value in price {price_id} metadata: {credit_str}")
+        
+        return 0
+    except Exception as e:
+        logger.error(f"Error retrieving credits from price {price_id}: {e}")
+        return 0
+
+
+async def update_user_credits(user_id: str, credits_to_add: int) -> bool:
+    """
+    Update user's credits by adding the specified amount.
+    Returns True if successful, False otherwise.
+    """
+    if not user_id or credits_to_add <= 0 or not supabase:
+        return False
+    
+    try:
+        # Get current user credits
+        user_result = supabase.table("users").select("credits").eq("id", user_id).execute()
+        
+        if not user_result.data or len(user_result.data) == 0:
+            logger.warning(f"User {user_id} not found when updating credits")
+            return False
+        
+        current_credits = user_result.data[0].get("credits", 0) or 0
+        new_credits = current_credits + credits_to_add
+        
+        # Update user credits
+        supabase.table("users").update({
+            "credits": new_credits
+        }).eq("id", user_id).execute()
+        
+        logger.info(f"Updated user {user_id} credits: {current_credits} + {credits_to_add} = {new_credits}")
+        return True
+    except Exception as e:
+        logger.error(f"Error updating credits for user {user_id}: {e}")
+        return False
+
+
 async def handle_checkout_completed(session):
     """Handle successful checkout session completion"""
     try:
@@ -1993,6 +2052,27 @@ async def handle_checkout_completed(session):
                         
                 except Exception as e:
                     logger.error(f"Error marking story {story_id} as purchased: {e}")
+            
+            # Update user credits from price metadata
+            if payment_status == "paid" and user_id and user_id != "unknown":
+                try:
+                    # Get price_id from line_items
+                    line_items = session.get("line_items")
+                    if not line_items:
+                        # Retrieve line items if not in session
+                        session_id = session.get("id")
+                        if session_id:
+                            full_session = stripe.checkout.Session.retrieve(session_id, expand=["line_items"])
+                            line_items = full_session.get("line_items")
+                    
+                    if line_items and line_items.get("data"):
+                        price_id = line_items["data"][0].get("price", {}).get("id")
+                        if price_id:
+                            credits = await get_credits_from_price(price_id)
+                            if credits > 0:
+                                await update_user_credits(user_id, credits)
+                except Exception as e:
+                    logger.error(f"Error updating credits for one-time payment: {e}")
             
             return
         
@@ -2079,6 +2159,20 @@ async def handle_checkout_completed(session):
                     
                     supabase.table("users").update(user_update_data).eq("id", target_user_id).execute()
                     logger.info(f"Updated user {target_user_id} with stripe_customer_id={customer_id} and subscription_status={subscription_status} from checkout completed")
+                    
+                    # Update user credits from subscription price metadata
+                    if subscription.status in ["active", "trialing"]:
+                        try:
+                            # Get price_id from subscription items
+                            subscription_items = subscription.get("items", {}).get("data", [])
+                            if subscription_items:
+                                price_id = subscription_items[0].get("price", {}).get("id")
+                                if price_id:
+                                    credits = await get_credits_from_price(price_id)
+                                    if credits > 0:
+                                        await update_user_credits(target_user_id, credits)
+                        except Exception as e:
+                            logger.error(f"Error updating credits for subscription checkout: {e}")
                 except Exception as e:
                     logger.error(f"Error updating user stripe_customer_id in checkout completed: {e}")
             elif customer_id:
@@ -2390,6 +2484,19 @@ async def handle_payment_succeeded(invoice):
                         if user_update_data:
                             supabase.table("users").update(user_update_data).eq("id", user_id).execute()
                             logger.info(f"Updated user {user_id} with subscription_status={user_update_data.get('subscription_status')} and subscription_expires={user_update_data.get('subscription_expires')} from payment succeeded")
+                        
+                        # Update user credits from subscription price metadata for renewals
+                        if subscription_status in ["active", "trialing"]:
+                            try:
+                                # Get price_id from subscription items
+                                if stripe_subscription.get("items", {}).get("data"):
+                                    price_id = stripe_subscription["items"]["data"][0].get("price", {}).get("id")
+                                    if price_id:
+                                        credits = await get_credits_from_price(price_id)
+                                        if credits > 0:
+                                            await update_user_credits(user_id, credits)
+                            except Exception as e:
+                                logger.error(f"Error updating credits for subscription renewal: {e}")
                     else:
                         # Try to find user by email if not found by stripe_customer_id
                         if customer_email:
@@ -2414,6 +2521,19 @@ async def handle_payment_succeeded(invoice):
                                     
                                     supabase.table("users").update(user_update_data).eq("id", user_id).execute()
                                     logger.info(f"Updated user {user_id} (found by email) with stripe_customer_id and subscription info from payment succeeded")
+                                    
+                                    # Update user credits from subscription price metadata for renewals
+                                    if subscription_status in ["active", "trialing"]:
+                                        try:
+                                            # Get price_id from subscription items
+                                            if stripe_subscription.get("items", {}).get("data"):
+                                                price_id = stripe_subscription["items"]["data"][0].get("price", {}).get("id")
+                                                if price_id:
+                                                    credits = await get_credits_from_price(price_id)
+                                                    if credits > 0:
+                                                        await update_user_credits(user_id, credits)
+                                        except Exception as e:
+                                            logger.error(f"Error updating credits for subscription renewal (found by email): {e}")
                             except Exception as e:
                                 logger.warning(f"Could not find user by email to update stripe_customer_id: {e}")
             
