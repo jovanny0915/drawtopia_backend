@@ -202,7 +202,7 @@ async def send_parental_consent_email_endpoint(request: Request):
         consent_link = f"{FRONTEND_URL}/consent/verify?token={consent_token}"
         
         # Send the email
-        result = await _send_email(parent_email, template_id="parental-consent-request", template_data={"parent_name": parent_name, "child_name": child_name, "consent_link": consent_link, "current_year": datetime.now().year})
+        result = await _send_email(parent_email, template_id="parental-consent-request", template_data={"parent_name": parent_name, "child_name": child_name, "consent_link": consent_link, "current_year": str(datetime.now().year)})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
@@ -261,7 +261,7 @@ async def send_gift_notification_email_endpoint(request: Request):
             delivery_info = f"{giver_name} is asking a grown-up in your life to help create your story. Ask them to check their email for the creation link."
         
         # Send the email
-        result = await _send_email(recipient_email, template_id="gift-notification", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": datetime.now().year})
+        result = await _send_email(recipient_email, template_id="gift-notification", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": str(datetime.now().year)})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
@@ -324,7 +324,7 @@ async def send_payment_success_email_endpoint(request: Request):
         next_billing_row = f'<tr><td style="color: #718096; padding: 8px 0;">Next billing</td><td style="color: #1a1a2e; text-align: right;">{next_billing_date}</td></tr>' if next_billing_date else ''
           
         # Send payment success email
-        result = await _send_email(to_email, template_id="premium-subscription-confirmation", template_data={"name": name, "plan_display": plan_display, "amount_display": amount_display, "next_billing_row": next_billing_row, "frontend_url": FRONTEND_URL, "current_year": datetime.now().year})
+        result = await _send_email(to_email, template_id="premium-subscription-confirmation", template_data={"name": name, "plan_display": plan_display, "amount_display": amount_display, "next_billing_row": next_billing_row, "frontend_url": FRONTEND_URL, "current_year": str(datetime.now().year)})
         
         # Check if email was sent successfully
         if not result.get("success", False):
@@ -394,7 +394,7 @@ async def send_payment_failed_email_endpoint(request: Request):
                 "plan_display": plan_display,
                 "amount_display": amount_display,
                 "update_url": update_url,
-                "current_year": datetime.now().year
+                "current_year": str(datetime.now().year)
             }
         )
         
@@ -465,7 +465,7 @@ async def send_subscription_cancelled_email_endpoint(request: Request):
                 "plan_display": plan_display,
                 "access_info": access_info,
                 "FRONTEND_URL": FRONTEND_URL,
-                "current_year": datetime.now().year
+                "current_year": str(datetime.now().year)
             }
         )
         
@@ -552,7 +552,7 @@ async def send_subscription_renewal_reminder_email_endpoint(request: Request):
                 "manage_link": manage_link,
                 "cancel_link": cancel_link,
                 "FRONTEND_URL": FRONTEND_URL,
-                "current_year": datetime.now().year
+                "current_year": str(datetime.now().year)
             }
         )
         
@@ -637,7 +637,6 @@ async def send_receipt_email_endpoint(request: Request):
         transaction_date_final = transaction_date_obj
         subtotal_final = subtotal or 0
         total_final = total or subtotal_final or 0
-        subject = f"Receipt for your Drawtopia purchase (Order #{transaction_id[:8]})"
         
         items_html = ""
         items_text = ""
@@ -646,50 +645,22 @@ async def send_receipt_email_endpoint(request: Request):
                 <tr>
                     <td style="color: #4a5568; padding: 8px 0;">{item['name']}</td>
                     <td style="color: #1a1a2e; text-align: right;">${item['amount']:.2f}</td>
-                </tr>
-"""
+                </tr>"""
             items_text += f"- {item['name']}: ${item['amount']:.2f}\n"
         
-        html_content = _load_template("receipt.html").format(
-            customer_name=customer_name_final,
-            transaction_id=transaction_id,
-            transaction_date=transaction_date_final.strftime('%B %d, %Y'),
-            items_html=items_html,
-            subtotal=f"{subtotal_final:.2f}",
-            tax=f"{tax:.2f}",
-            total=f"{total_final:.2f}",
-            current_year=datetime.now().year
-        )
-        
-        text_content = f"""
-Receipt for your Drawtopia purchase (Order #{transaction_id[:8]})
-
-Hi {customer_name_final},
-
-Thank you for your purchase! Here's your receipt.
-
-Order Details:
-- Order ID: {transaction_id}
-- Date: {transaction_date_final.strftime('%B %d, %Y')}
-
-Items:
-{items_text}
-Subtotal: ${subtotal_final:.2f}
-Tax: ${tax:.2f}
-Total: ${total_final:.2f}
-
-Need help? Reply to this email or contact hello@drawtopia.ai
-
-© {datetime.now().year} Drawtopia
-"""
-        
         # Send receipt email
-        result = await _send_email(to_email, subject, html_content, text_content)
         result = await _send_email(
             to_email,
-            template_id="",
+            template_id="order-receipt-confirmation",
             template_data={
-
+                "customer_name": customer_name,
+                "transaction_id": transaction_id,
+                "transaction_date": transaction_date_final.strftime('%B %d, %Y'),
+                "items": items,
+                "subtotal": subtotal_final,
+                "tax": tax,
+                "total": total_final,
+                "current_year": str(datetime.now().year)
             }
         )
         
@@ -786,7 +757,7 @@ async def send_book_completion_email_endpoint(request: Request):
                 "format_details": format_details,
                 "preview_link": preview_link,
                 "download_link": download_link,
-                "current_year": datetime.now().year
+                "current_year": str(datetime.now().year)
             }
         )
         
