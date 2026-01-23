@@ -2143,16 +2143,30 @@ async def handle_subscription_updated(subscription):
         customer_id = subscription.get("customer")
         status = subscription.get("status")
         current_period_end = subscription.get("current_period_end")
+        current_period_start = subscription.get("current_period_start")
         
         logger.info(f"Subscription updated: {subscription_id} to status {status}")
         
+        # Normalize "canceled" to "cancelled" for consistency
+        normalized_status = "cancelled" if status in ["canceled", "cancelled"] else status
+        
         if supabase:
             update_data = {
-                "status": status,
-                "current_period_start": datetime.utcnow().isoformat() + "Z",
-                "current_period_end": datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
+                "status": normalized_status,
                 "updated_at": datetime.utcnow().isoformat()
             }
+            
+            # Set cancelled_at if status is cancelled (preserve existing cancelled_at if already set)
+            if normalized_status == "cancelled":
+                existing_sub = supabase.table("subscriptions").select("cancelled_at").eq("stripe_subscription_id", subscription_id).execute()
+                if not existing_sub.data or not existing_sub.data[0].get("cancelled_at"):
+                    update_data["cancelled_at"] = datetime.utcnow().isoformat()
+            
+            # Use actual period dates from Stripe subscription if available
+            if current_period_start:
+                update_data["current_period_start"] = datetime.fromtimestamp(current_period_start).isoformat() + "Z"
+            if current_period_end:
+                update_data["current_period_end"] = datetime.fromtimestamp(current_period_end).isoformat() + "Z"
             
             supabase.table("subscriptions").update(update_data).eq("stripe_subscription_id", subscription_id).execute()
             
@@ -2161,15 +2175,20 @@ async def handle_subscription_updated(subscription):
             
             if user_result.data and len(user_result.data) > 0:
                 user_id = user_result.data[0].get("id")
-                subscription_expires = datetime.utcnow().replace(month=(datetime.utcnow().month + 1) % 12 if datetime.utcnow().month == 12 else datetime.utcnow().month + 1).isoformat() + "Z",
                 
                 # Set subscription_status to "premium" if subscription is active or trialing
-                user_subscription_status = "premium" if status in ["active", "trialing"] else status
+                if normalized_status in ["active", "trialing"]:
+                    user_subscription_status = "premium"
+                else:
+                    user_subscription_status = normalized_status
                 
                 user_update_data = {
-                    "subscription_status": user_subscription_status,
-                    "subscription_expires": subscription_expires
+                    "subscription_status": user_subscription_status
                 }
+                
+                # Keep subscription_expires until period end (even when cancelled)
+                if current_period_end:
+                    user_update_data["subscription_expires"] = datetime.fromtimestamp(current_period_end).isoformat() + "Z"
                 
                 supabase.table("users").update(user_update_data).eq("id", user_id).execute()
                 logger.info(f"Updated user {user_id} with subscription info from subscription updated event (status: {user_subscription_status})")
