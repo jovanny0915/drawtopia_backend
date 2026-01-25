@@ -1590,6 +1590,16 @@ class CancelSubscriptionResponse(BaseModel):
     message: Optional[str] = None
     access_until: Optional[str] = None
 
+class DeductCreditRequest(BaseModel):
+    """Request model for deducting user credit"""
+    amount: int = 1  # Default to 1 credit
+
+class DeductCreditResponse(BaseModel):
+    """Response model for credit deduction"""
+    success: bool
+    message: Optional[str] = None
+    remaining_credits: Optional[int] = None
+
 
 @app.post("/api/stripe/create-onetime-checkout", response_model=SubscriptionResponse)
 async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
@@ -1902,6 +1912,84 @@ async def cancel_subscription(request: Request, cancel_request: CancelSubscripti
             status_code=500,
             detail=f"Failed to cancel subscription: {str(e)}"
         )
+
+
+@app.post("/api/users/deduct-credit", response_model=DeductCreditResponse)
+@limiter.limit("20/minute")
+async def deduct_credit(request: Request, deduct_request: DeductCreditRequest):
+    """
+    Deduct credit from user's account.
+    Requires authentication via Bearer token.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    
+    try:
+        # Extract user ID from authorization token
+        authorization = request.headers.get("Authorization")
+        user_id = extract_user_from_token(authorization)
+        
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required. Please provide a valid Bearer token."
+            )
+        
+        # Get current user credit
+        user_result = supabase.table("users").select("credit").eq("id", user_id).execute()
+        
+        if not user_result.data or len(user_result.data) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        
+        current_credit = user_result.data[0].get("credit")
+        
+        # Parse credit as integer (handle string or number)
+        if current_credit is None:
+            current_credit = 0
+        else:
+            try:
+                current_credit = int(current_credit) if isinstance(current_credit, str) else current_credit
+            except (ValueError, TypeError):
+                current_credit = 0
+        
+        # Check if user has enough credit
+        if current_credit < deduct_request.amount:
+            return DeductCreditResponse(
+                success=False,
+                message="Insufficient credits",
+                remaining_credits=current_credit
+            )
+        
+        # Deduct credit
+        new_credit = current_credit - deduct_request.amount
+        
+        # Update user credit in database
+        update_result = supabase.table("users").update({
+            "credit": new_credit
+        }).eq("id", user_id).execute()
+        
+        if not update_result.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update user credit"
+            )
+        
+        logger.info(f"Deducted {deduct_request.amount} credit(s) from user {user_id}. Remaining: {new_credit}")
+        
+        return DeductCreditResponse(
+            success=True,
+            message=f"Successfully deducted {deduct_request.amount} credit(s)",
+            remaining_credits=new_credit
+        )
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error deducting credit: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to deduct credit: {str(e)}")
 
 
 @app.post("/api/stripe/webhook")

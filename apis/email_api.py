@@ -761,6 +761,7 @@ async def send_book_completion_email_endpoint(request: Request):
         download_link = body.get("download_link")
         story_world = body.get("story_world")
         adventure_type = body.get("adventure_type")
+        age_group = body.get("age_group")
         
         if not to_email:
             raise HTTPException(
@@ -782,41 +783,46 @@ async def send_book_completion_email_endpoint(request: Request):
                 detail="Email service not available"
             )
         
+        adventure_summary = None
         # Generate email content
         if book_format == 'interactive_search':
-            format_description = "an 8-scene Where's Waldo-style adventure in the Enchanted Forest"
-            format_details = f"""
-                <li>Format: Interactive Search (Where's Waldo style)</li>
-                <li>Scenes: 4 magical locations</li>
-                <li>Character: {character_name} ({character_type})</li>
-                <li>Special Ability: {special_ability}</li>
-                <li>Reading Time: ~15-20 minutes</li>"""
+            result = await _send_email(
+                to_email,
+                template_id="book-completion-interactive",
+                template_data={
+                    "character_name": character_name,
+                    "parent_name": parent_name,
+                    "child_name": child_name,
+                    "book_title": book_title,
+                    "character_type": character_type,
+                    "preview_link": preview_link,
+                    "special_ability": special_ability,
+                    "current_year": str(datetime.now().year),
+                    "download_link": download_link,
+                }
+            )
+            
         else:
-            format_description = f"a 5-page adventure where {character_name} the {character_type} uses their special power"
-            format_details = f"""
-                <li>Format: Story Adventure (5-page narrative)</li>
-                <li>Pages: 5 beautifully illustrated pages</li>
-                <li>Character: {character_name} ({character_type})</li>
-                <li>Special Ability: {special_ability}</li>
-                <li>World: {story_world or 'Magical World'}</li>
-                <li>Adventure Type: {adventure_type or 'Epic Quest'}</li>
-                <li>Reading Time: ~10 minutes</li>"""
-        
-        # Send book completion email
-        result = await _send_email(
-            to_email,
-            template_id="story-creation-notification",
-            template_data={
-                "child_name": child_name,
-                "parent_name": parent_name,
-                "book_title": book_title,
-                "format_description": format_description,
-                "format_details": format_details,
-                "preview_link": preview_link,
-                "download_link": download_link,
-                "current_year": str(datetime.now().year)
-            }
-        )
+            # Send book completion email
+            result = await _send_email(
+                to_email,
+                template_id="book-completion-story",
+                template_data={
+                    "character_name": character_name,
+                    "parent_name": parent_name,
+                    "child_name": child_name,
+                    "book_title": book_title,
+                    "character_type": character_type,
+                    "adventure_summary": adventure_summary if adventure_summary else "This is a story about a character who uses their special ability to adventure.",
+                    "preview_link": preview_link,
+                    "special_ability": special_ability,
+                    "story_world": story_world,
+                    "adventure_type": adventure_type,
+                    "age_group": age_group,
+                    "current_year": str(datetime.now().year),
+                    "download_link": download_link,
+                }
+            )
         
         # Check if email was sent successfully
         if not result.get("success", False):
