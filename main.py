@@ -1730,7 +1730,6 @@ async def create_payment_intent(request: CreatePaymentIntentRequest):
             amount=amount,
             currency="usd",
             payment_method_types=["card"],
-            automatic_payment_methods={"enabled": True},
             metadata={
                 "user_id": request.user_id or "unknown",
                 "purchase_type": request.purchase_type,
