@@ -306,7 +306,7 @@ async def send_gift_notification_email_endpoint(request: Request):
             delivery_info = f"{giver_name} is asking a grown-up in your life to help create your story. Ask them to check their email for the creation link."
         
         # Send the email
-        result = await _send_email(recipient_email, template_id="gift-notification", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": str(datetime.now().year)})
+        result = await _send_email(recipient_email, template_id="gift-notification-email", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": str(datetime.now().year)})
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
