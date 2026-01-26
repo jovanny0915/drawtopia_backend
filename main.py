@@ -1725,21 +1725,39 @@ async def create_payment_intent(request: CreatePaymentIntentRequest):
         
         logger.info(f"Using price_id: {price_id} for purchase_type: {request.purchase_type}, amount: {amount} cents")
         
-        # Create payment intent
+        # Create payment intent with proper configuration for client-side confirmation
+        # Note: confirmation_method="manual" allows client-side confirmation via Stripe.js
         payment_intent = stripe.PaymentIntent.create(
             amount=amount,
             currency="usd",
             payment_method_types=["card"],
+            confirmation_method="manual",  # Manual confirmation for client-side
+            capture_method="automatic",  # Automatic capture after confirmation
             metadata={
                 "user_id": request.user_id or "unknown",
                 "purchase_type": request.purchase_type,
                 "story_id": request.story_id or "none",
                 "gift_id": request.gift_id or "none"
             },
-            receipt_email=request.user_email
+            receipt_email=request.user_email if request.user_email else None
         )
         
         logger.info(f"Created payment intent {payment_intent.id} for {request.purchase_type}")
+        logger.info(f"Payment intent client_secret: {payment_intent.client_secret[:20]}...")
+        logger.info(f"Payment intent status: {payment_intent.status}")
+        logger.info(f"Payment intent amount: {payment_intent.amount} {payment_intent.currency}")
+        
+        # Verify the payment intent was created successfully
+        if not payment_intent.client_secret:
+            raise HTTPException(status_code=500, detail="Payment intent created but client_secret is missing")
+        
+        # Verify payment intent exists by retrieving it
+        try:
+            verify_intent = stripe.PaymentIntent.retrieve(payment_intent.id)
+            logger.info(f"Verified payment intent exists: {verify_intent.id}, status: {verify_intent.status}")
+        except Exception as e:
+            logger.error(f"Failed to verify payment intent: {e}")
+            raise HTTPException(status_code=500, detail=f"Payment intent created but verification failed: {str(e)}")
         
         return PaymentIntentResponse(
             success=True,
@@ -2895,6 +2913,8 @@ async def get_payment_intent(payment_intent_id: str):
         metadata = payment_intent.metadata
         purchase_type = metadata.get("purchase_type", "unknown")
         
+        logger.info(f"Retrieved payment intent {payment_intent_id}: status={payment_intent.status}, amount={payment_intent.amount}")
+        
         return {
             "success": True,
             "payment_intent_id": payment_intent.id,
@@ -2905,6 +2925,11 @@ async def get_payment_intent(payment_intent_id: str):
             "currency": payment_intent.currency,
             "metadata": metadata
         }
+    except stripe.error.InvalidRequestError as e:
+        if "No such payment_intent" in str(e):
+            logger.error(f"Payment intent {payment_intent_id} not found")
+            raise HTTPException(status_code=404, detail=f"Payment intent not found: {payment_intent_id}")
+        raise HTTPException(status_code=400, detail=str(e))
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error retrieving payment intent: {e}")
         raise HTTPException(status_code=400, detail=str(e))
