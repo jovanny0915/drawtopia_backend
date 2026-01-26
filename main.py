@@ -84,6 +84,7 @@ STRIPE_PRICE_ID_MONTHLY = os.getenv("STRIPE_PRICE_ID_MONTHLY", "")
 STRIPE_PRICE_ID_YEARLY = os.getenv("STRIPE_PRICE_ID_YEARLY", "")
 STRIPE_PRICE_ID_SINGLE_STORY = os.getenv("STRIPE_PRICE_ID_SINGLE_STORY", "")
 STRIPE_PRICE_ID_STORY_BUNDLE = os.getenv("STRIPE_PRICE_ID_STORY_BUNDLE", "")
+STRIPE_PRICE_ID_GIFT = os.getenv("STRIPE_PRICE_ID_GIFT", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # Initialize Stripe
@@ -1550,8 +1551,9 @@ class CreateSubscriptionRequest(BaseModel):
 
 class CreateOnetimeCheckoutRequest(BaseModel):
     """Request model for creating a one-time purchase checkout session"""
-    purchase_type: str  # "single_story" or "story_bundle"
+    purchase_type: str  # "single_story", "story_bundle", or "gift"
     story_id: Optional[str] = None  # Story ID to mark as purchased after payment
+    gift_id: Optional[str] = None  # Gift ID for gift purchases
     user_email: Optional[str] = None
     user_id: Optional[str] = None
     success_url: Optional[str] = None
@@ -1615,6 +1617,8 @@ async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
             price_id = STRIPE_PRICE_ID_SINGLE_STORY
         elif request.purchase_type == "story_bundle":
             price_id = STRIPE_PRICE_ID_STORY_BUNDLE
+        elif request.purchase_type == "gift":
+            price_id = STRIPE_PRICE_ID_GIFT
         else:
             raise HTTPException(status_code=400, detail=f"Invalid purchase_type: {request.purchase_type}")
         
@@ -1637,7 +1641,8 @@ async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
             metadata={
                 "user_id": request.user_id or "unknown",
                 "purchase_type": request.purchase_type,
-                "story_id": request.story_id or "none"
+                "story_id": request.story_id or "none",
+                "gift_id": request.gift_id or "none"
             }
         )
         
@@ -2104,14 +2109,22 @@ async def handle_checkout_completed(session):
         metadata = session.get("metadata", {})
         logger.info(f"Checkout completed: {session}")
         
-        # Handle one-time payment (story purchase)
+        # Handle one-time payment (story purchase or gift purchase)
         if mode == "payment":
             story_id = metadata.get("story_id")
+            gift_id = metadata.get("gift_id")
             user_id = metadata.get("user_id")
             purchase_type = metadata.get("purchase_type")
             payment_status = session.get("payment_status")
             
-            logger.info(f"Checkout completed for one-time payment: story_id={story_id}, user_id={user_id}")
+            logger.info(f"Checkout completed for one-time payment: purchase_type={purchase_type}, story_id={story_id}, gift_id={gift_id}, user_id={user_id}")
+            
+            # Handle gift purchase
+            if purchase_type == "gift" and payment_status == "paid":
+                logger.info(f"✅ Gift purchase completed successfully: gift_id={gift_id}, user_id={user_id}")
+                # Gift will be created/updated by the frontend after payment verification
+                # The webhook just logs the successful payment
+                return
             
             # Mark story as purchased if story_id is provided and payment is successful
             if story_id and payment_status == "paid" and supabase:
