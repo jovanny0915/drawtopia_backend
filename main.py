@@ -1612,6 +1612,8 @@ async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
         raise HTTPException(status_code=503, detail="Stripe is not configured")
     
     try:
+        logger.info(f"Creating checkout session for purchase_type: {request.purchase_type}, user_id: {request.user_id}")
+        
         # Determine price ID based on purchase type
         if request.purchase_type == "single_story":
             price_id = STRIPE_PRICE_ID_SINGLE_STORY
@@ -1623,7 +1625,10 @@ async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
             raise HTTPException(status_code=400, detail=f"Invalid purchase_type: {request.purchase_type}")
         
         if not price_id:
+            logger.error(f"Price ID not configured for purchase_type: {request.purchase_type}")
             raise HTTPException(status_code=503, detail=f"Price ID not configured for {request.purchase_type}")
+        
+        logger.info(f"Using price_id: {price_id} for purchase_type: {request.purchase_type}")
         
         # Create checkout session
         checkout_session = stripe.checkout.Session.create(
@@ -1655,8 +1660,12 @@ async def create_onetime_checkout(request: CreateOnetimeCheckoutRequest):
         )
         
     except stripe.error.StripeError as e:
-        logger.error(f"Stripe error creating one-time checkout: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        error_detail = f"Stripe error: {str(e)}"
+        if hasattr(e, 'user_message'):
+            error_detail += f" - {e.user_message}"
+        logger.error(f"Stripe error creating one-time checkout: {error_detail}")
+        logger.error(f"Request details - purchase_type: {request.purchase_type}, price_id: {STRIPE_PRICE_ID_GIFT if request.purchase_type == 'gift' else 'N/A'}")
+        raise HTTPException(status_code=400, detail=error_detail)
     except HTTPException as e:
         raise e
     except Exception as e:
