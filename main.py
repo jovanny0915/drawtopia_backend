@@ -1559,6 +1559,21 @@ class CreateOnetimeCheckoutRequest(BaseModel):
     success_url: Optional[str] = None
     cancel_url: Optional[str] = None
 
+class CreatePaymentIntentRequest(BaseModel):
+    """Request model for creating a payment intent for Stripe Elements"""
+    purchase_type: str  # "single_story", "story_bundle", or "gift"
+    amount: int  # Amount in cents
+    story_id: Optional[str] = None  # Story ID to mark as purchased after payment
+    gift_id: Optional[str] = None  # Gift ID for gift purchases
+    user_email: Optional[str] = None
+    user_id: Optional[str] = None
+
+class PaymentIntentResponse(BaseModel):
+    """Response model for payment intent creation"""
+    success: bool
+    clientSecret: str
+    payment_intent_id: Optional[str] = None
+
 class SubscriptionResponse(BaseModel):
     """Response model for subscription operations"""
     success: bool
@@ -1590,23 +1605,6 @@ class CancelSubscriptionResponse(BaseModel):
     """Response model for subscription cancellation"""
     success: bool
     message: Optional[str] = None
-
-class CreatePaymentIntentRequest(BaseModel):
-    """Request model for creating a payment intent"""
-    purchase_type: str  # "gift", "single_story", "story_bundle"
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-    gift_id: Optional[str] = None
-    story_id: Optional[str] = None
-    amount: Optional[int] = None  # Amount in cents (optional, will use price from product if not provided)
-
-class PaymentIntentResponse(BaseModel):
-    """Response model for payment intent creation"""
-    success: bool
-    client_secret: str
-    payment_intent_id: str
-    amount: int
-    currency: str = "usd"
     access_until: Optional[str] = None
 
 class DeductCreditRequest(BaseModel):
@@ -1623,90 +1621,33 @@ class DeductCreditResponse(BaseModel):
 @app.post("/api/stripe/create-payment-intent", response_model=PaymentIntentResponse)
 async def create_payment_intent(request: CreatePaymentIntentRequest):
     """
-    Create a Stripe Payment Intent for direct card payment using Stripe Elements.
-    Returns the client_secret needed to complete the payment on the frontend.
+    Create a Stripe payment intent for use with Stripe Elements.
     """
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Stripe is not configured")
     
     try:
-        logger.info(f"Creating payment intent for purchase_type: {request.purchase_type}, user_id: {request.user_id}")
-        
-        # Determine price based on purchase type
-        amount = request.amount
-        if not amount:
-            # Retrieve price from Stripe Price object
-            if request.purchase_type == "single_story":
-                price_id = STRIPE_PRICE_ID_SINGLE_STORY
-            elif request.purchase_type == "story_bundle":
-                price_id = STRIPE_PRICE_ID_STORY_BUNDLE
-            elif request.purchase_type == "gift":
-                price_id = STRIPE_PRICE_ID_GIFT
-            else:
-                raise HTTPException(status_code=400, detail=f"Invalid purchase_type: {request.purchase_type}")
-            
-            if not price_id:
-                logger.error(f"Price ID not configured for purchase_type: {request.purchase_type}")
-                raise HTTPException(status_code=503, detail=f"Price ID not configured for {request.purchase_type}")
-            
-            # Retrieve the price to get the amount
-            price = stripe.Price.retrieve(price_id)
-            amount = price.unit_amount  # Amount in cents
-            logger.info(f"Retrieved amount from price {price_id}: {amount} cents")
-        
-        # Build metadata
-        metadata = {
-            "purchase_type": request.purchase_type,
-            "user_id": request.user_id or "unknown",
-        }
-        if request.gift_id:
-            metadata["gift_id"] = request.gift_id
-        if request.story_id:
-            metadata["story_id"] = request.story_id
+        logger.info(f"Creating payment intent for purchase_type: {request.purchase_type}, amount: {request.amount}, user_id: {request.user_id}")
         
         # Create payment intent
-        payment_intent_params = {
-            "amount": amount,
-            "currency": "usd",
-            "metadata": metadata,
-            "automatic_payment_methods": {
-                "enabled": True,
-            },
-        }
+        payment_intent = stripe.PaymentIntent.create(
+            amount=request.amount,
+            currency='usd',
+            payment_method_types=['card'],
+            metadata={
+                "user_id": request.user_id or "unknown",
+                "purchase_type": request.purchase_type,
+                "story_id": request.story_id or "none",
+                "gift_id": request.gift_id or "none"
+            }
+        )
         
-        # Add customer email if provided
-        if request.user_email:
-            payment_intent_params["receipt_email"] = request.user_email
-        
-        payment_intent = stripe.PaymentIntent.create(**payment_intent_params)
-        
-        logger.info(f"Created payment intent {payment_intent.id} for {request.purchase_type}, amount: ${amount/100:.2f}")
-        
-        # Store payment intent in database for tracking
-        if supabase:
-            try:
-                supabase.table("payment_intents").insert({
-                    "payment_intent_id": payment_intent.id,
-                    "user_id": request.user_id,
-                    "purchase_type": request.purchase_type,
-                    "gift_id": request.gift_id,
-                    "story_id": request.story_id,
-                    "amount": amount,
-                    "currency": "usd",
-                    "status": "created",
-                    "created_at": datetime.utcnow().isoformat()
-                }).execute()
-                logger.info(f"Stored payment intent {payment_intent.id} in database")
-            except Exception as db_error:
-                logger.warning(f"Failed to store payment intent in database: {db_error}")
-                # Don't fail the request if database storage fails
+        logger.info(f"Created payment intent {payment_intent.id} for {request.purchase_type}")
         
         return PaymentIntentResponse(
             success=True,
-            client_secret=payment_intent.client_secret,
-            payment_intent_id=payment_intent.id,
-            amount=amount,
-            currency="usd"
+            clientSecret=payment_intent.client_secret,
+            payment_intent_id=payment_intent.id
         )
         
     except stripe.error.StripeError as e:
@@ -1715,8 +1656,6 @@ async def create_payment_intent(request: CreatePaymentIntentRequest):
             error_detail += f" - {e.user_message}"
         logger.error(f"Stripe error creating payment intent: {error_detail}")
         raise HTTPException(status_code=400, detail=error_detail)
-    except HTTPException as e:
-        raise e
     except Exception as e:
         logger.error(f"Error creating payment intent: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create payment intent: {str(e)}")
@@ -2168,10 +2107,6 @@ async def stripe_webhook(request: Request):
             await handle_payment_succeeded(event_data)
         elif event_type == "invoice.payment_failed":
             await handle_payment_failed(event_data)
-        elif event_type == "payment_intent.succeeded":
-            await handle_payment_intent_succeeded(event_data)
-        elif event_type == "payment_intent.payment_failed":
-            await handle_payment_intent_failed(event_data)
         else:
             logger.info(f"Unhandled webhook event type: {event_type}")
         
@@ -2835,143 +2770,6 @@ async def handle_payment_failed(invoice):
                 
     except Exception as e:
         logger.error(f"Error handling payment failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-
-async def handle_payment_intent_succeeded(payment_intent):
-    """Handle successful PaymentIntent (for direct Stripe Elements payments)"""
-    try:
-        payment_intent_id = payment_intent.get("id")
-        amount = payment_intent.get("amount")
-        currency = payment_intent.get("currency", "usd")
-        metadata = payment_intent.get("metadata", {})
-        receipt_email = payment_intent.get("receipt_email")
-        
-        purchase_type = metadata.get("purchase_type")
-        user_id = metadata.get("user_id")
-        gift_id = metadata.get("gift_id")
-        story_id = metadata.get("story_id")
-        
-        logger.info(f"Payment Intent succeeded: {payment_intent_id}, purchase_type={purchase_type}, amount=${amount/100:.2f}")
-        
-        # Update payment intent status in database
-        if supabase:
-            try:
-                supabase.table("payment_intents").update({
-                    "status": "succeeded",
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("payment_intent_id", payment_intent_id).execute()
-                logger.info(f"Updated payment intent {payment_intent_id} status to succeeded")
-            except Exception as db_error:
-                logger.warning(f"Failed to update payment intent in database: {db_error}")
-        
-        # Handle gift purchase
-        if purchase_type == "gift" and gift_id:
-            logger.info(f"✅ Gift purchase completed via Payment Intent: gift_id={gift_id}, user_id={user_id}")
-            
-            # Update gift status to paid
-            if supabase:
-                try:
-                    supabase.table("gifts").update({
-                        "payment_status": "paid",
-                        "payment_intent_id": payment_intent_id,
-                        "updated_at": datetime.utcnow().isoformat()
-                    }).eq("id", gift_id).execute()
-                    logger.info(f"Updated gift {gift_id} payment status to paid")
-                except Exception as db_error:
-                    logger.error(f"Failed to update gift status: {db_error}")
-        
-        # Handle story purchase (single or bundle)
-        elif purchase_type in ["single_story", "story_bundle"]:
-            logger.info(f"Story purchase completed via Payment Intent: type={purchase_type}, story_id={story_id}, user_id={user_id}")
-            
-            # Add credits to user account
-            if supabase and user_id:
-                try:
-                    # Determine credit amount based on purchase type
-                    credits_to_add = 1 if purchase_type == "single_story" else 5
-                    
-                    # Get current user credits
-                    user_response = supabase.table("users").select("credit").eq("id", user_id).execute()
-                    if user_response.data:
-                        current_credits = user_response.data[0].get("credit", 0) or 0
-                        new_credits = current_credits + credits_to_add
-                        
-                        # Update user credits
-                        supabase.table("users").update({
-                            "credit": new_credits,
-                            "updated_at": datetime.utcnow().isoformat()
-                        }).eq("id", user_id).execute()
-                        logger.info(f"Added {credits_to_add} credits to user {user_id}. New balance: {new_credits}")
-                except Exception as db_error:
-                    logger.error(f"Failed to add credits to user: {db_error}")
-        
-        # Create transaction record
-        if supabase:
-            try:
-                supabase.table("transactions").insert({
-                    "payment_intent_id": payment_intent_id,
-                    "user_id": user_id,
-                    "purchase_type": purchase_type,
-                    "amount": amount,
-                    "currency": currency,
-                    "status": "succeeded",
-                    "gift_id": gift_id,
-                    "story_id": story_id,
-                    "created_at": datetime.utcnow().isoformat()
-                }).execute()
-                logger.info(f"Created transaction record for payment intent {payment_intent_id}")
-            except Exception as db_error:
-                logger.warning(f"Failed to create transaction record: {db_error}")
-                
-    except Exception as e:
-        logger.error(f"Error handling payment intent succeeded: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-
-async def handle_payment_intent_failed(payment_intent):
-    """Handle failed PaymentIntent (for direct Stripe Elements payments)"""
-    try:
-        payment_intent_id = payment_intent.get("id")
-        amount = payment_intent.get("amount")
-        metadata = payment_intent.get("metadata", {})
-        last_payment_error = payment_intent.get("last_payment_error", {})
-        
-        purchase_type = metadata.get("purchase_type")
-        user_id = metadata.get("user_id")
-        gift_id = metadata.get("gift_id")
-        
-        error_message = last_payment_error.get("message", "Unknown error")
-        
-        logger.warning(f"Payment Intent failed: {payment_intent_id}, purchase_type={purchase_type}, error={error_message}")
-        
-        # Update payment intent status in database
-        if supabase:
-            try:
-                supabase.table("payment_intents").update({
-                    "status": "failed",
-                    "error_message": error_message,
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("payment_intent_id", payment_intent_id).execute()
-                logger.info(f"Updated payment intent {payment_intent_id} status to failed")
-            except Exception as db_error:
-                logger.warning(f"Failed to update payment intent in database: {db_error}")
-        
-        # Update gift status if applicable
-        if purchase_type == "gift" and gift_id and supabase:
-            try:
-                supabase.table("gifts").update({
-                    "payment_status": "failed",
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("id", gift_id).execute()
-                logger.info(f"Updated gift {gift_id} payment status to failed")
-            except Exception as db_error:
-                logger.error(f"Failed to update gift status: {db_error}")
-                
-    except Exception as e:
-        logger.error(f"Error handling payment intent failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
