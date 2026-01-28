@@ -1618,6 +1618,112 @@ class DeductCreditResponse(BaseModel):
     remaining_credits: Optional[int] = None
 
 
+class GiftCheckNotificationRequest(BaseModel):
+    """Request model for checking gift notification and adding credit"""
+    gift_id: str
+
+
+class GiftCheckNotificationResponse(BaseModel):
+    """Response model for gift check notification"""
+    success: bool
+    message: Optional[str] = None
+    credit_added: bool = False
+    remaining_credits: Optional[int] = None
+
+
+@app.post("/api/gifts/check-notification-and-add-credit", response_model=GiftCheckNotificationResponse)
+@limiter.limit("30/minute")
+async def check_gift_notification_and_add_credit(request: Request, body: GiftCheckNotificationRequest):
+    """
+    When the recipient clicks a gift notification on the dashboard:
+    1) Mark the gift as checked
+    2) Add 1 credit to the recipient (to_user_id / current user)
+    Only adds credit once per gift (when first marking as checked).
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+
+    try:
+        authorization = request.headers.get("Authorization")
+        current_user_id = extract_user_from_token(authorization)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        gift_id = body.gift_id.strip()
+        if not gift_id:
+            raise HTTPException(status_code=400, detail="gift_id is required")
+
+        # Get gift
+        gift_result = supabase.table("gifts").select("*").eq("id", gift_id).execute()
+        if not gift_result.data or len(gift_result.data) == 0:
+            raise HTTPException(status_code=404, detail="Gift not found")
+
+        gift = gift_result.data[0]
+        to_user_id = gift.get("to_user_id")
+        delivery_email = (gift.get("delivery_email") or "").strip().lower()
+
+        # Get current user email for matching
+        user_result = supabase.table("users").select("id, email").eq("id", current_user_id).execute()
+        if not user_result.data or len(user_result.data) == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+        current_user_email = (user_result.data[0].get("email") or "").strip().lower()
+
+        # Verify current user is the recipient (to_user_id or delivery_email)
+        is_recipient = (
+            (to_user_id and str(to_user_id) == str(current_user_id))
+            or (delivery_email and current_user_email and delivery_email == current_user_email)
+        )
+        if not is_recipient:
+            raise HTTPException(status_code=403, detail="You are not the recipient of this gift")
+
+        # If already checked, do not add credit again (idempotent)
+        if gift.get("checked") is True:
+            return GiftCheckNotificationResponse(
+                success=True,
+                message="Gift already checked",
+                credit_added=False
+            )
+
+        # Mark gift as checked
+        supabase.table("gifts").update({"checked": True}).eq("id", gift_id).execute()
+
+        # Add 1 credit to the recipient (current user)
+        credit_result = supabase.table("users").select("credit").eq("id", current_user_id).execute()
+        if not credit_result.data:
+            return GiftCheckNotificationResponse(
+                success=True,
+                message="Gift marked as checked",
+                credit_added=False
+            )
+
+        current_credit = credit_result.data[0].get("credit")
+        if current_credit is None:
+            current_credit = 0
+        else:
+            try:
+                current_credit = int(current_credit) if isinstance(current_credit, str) else current_credit
+            except (ValueError, TypeError):
+                current_credit = 0
+
+        new_credit = current_credit + 1
+        supabase.table("users").update({"credit": new_credit}).eq("id", current_user_id).execute()
+
+        logger.info(f"Gift {gift_id} checked; added 1 credit to user {current_user_id}. Credits: {new_credit}")
+
+        return GiftCheckNotificationResponse(
+            success=True,
+            message="Gift checked and 1 credit added",
+            credit_added=True,
+            remaining_credits=new_credit
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in check_gift_notification_and_add_credit: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/stripe/create-payment-intent", response_model=PaymentIntentResponse)
 async def create_payment_intent(request: CreatePaymentIntentRequest):
     """
@@ -3002,7 +3108,9 @@ async def deliver_gift_endpoint(request: Request):
                         "recipient_name": gift.get("child_name", "there"),
                         "giver_name": sender_name,
                         "occasion": gift.get("occasion", "special occasion"),
-                        "gift_message": gift.get("special_msg", "Enjoy your special story!")
+                        "gift_message": gift.get("special_msg", "Enjoy your special story!"),
+                        "gift_order_id": gift_id,
+                        "scenario": "giver_creating",
                     })
                     if result.get("success"):
                         logger.info(f"✅ Gift notification email sent to {recipient_email}")

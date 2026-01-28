@@ -294,19 +294,54 @@ async def send_gift_notification_email_endpoint(request: Request):
                 detail="Email service not available"
             )
         
-        # Generate email content
+        # Scenario: giver_creating | another_adult_creating | scheduled_delivery
+        # Backward compat: immediate_email -> giver_creating, creation_link -> another_adult_creating
         delivery_method = body.get("delivery_method", "immediate_email")
+        if delivery_method == "immediate_email":
+            delivery_method = "giver_creating"
+        elif delivery_method in ("creation_link", "link"):
+            delivery_method = "another_adult_creating"
         
-        delivery_info = ""
-        if delivery_method == 'immediate_email':
-            delivery_info = "Your story will be ready to read very soon! We'll send you another email when it's complete, usually within 1-2 hours."
-        elif delivery_method == 'scheduled_delivery':
-            delivery_info = "Your story will be delivered soon! Keep an eye on your email."
+        scenario = body.get("scenario") or delivery_method
+        designated_adult_name = body.get("designated_adult_name", "")
+        delivery_date = body.get("delivery_date", "")
+        delivery_time = body.get("delivery_time", "")
+        gift_order_id = body.get("gift_order_id", "")
+        
+        # Build status line and scenario body per template spec
+        if scenario == "giver_creating":
+            status_text = f"✏️ {giver_name} is creating your character..."
+            scenario_body = "Your story will be ready to read very soon! We'll send you another email when it's complete, usually within 1-2 hours."
+        elif scenario == "another_adult_creating":
+            adult_name = designated_adult_name or "A grown-up"
+            status_text = f"🎨 {adult_name} is creating your character..."
+            scenario_body = f"{giver_name} asked a grown-up in your life to help bring your story to life. They'll receive an email with a creation link where they can upload your drawing. Once your character is created, we'll generate a magical story featuring YOU!"
+        elif scenario == "scheduled_delivery":
+            status_text = "⏰ Your gift is scheduled..."
+            if delivery_date and delivery_time:
+                scenario_body = f"Your personalized story will be delivered on {delivery_date} at {delivery_time}. Mark your calendar!"
+            else:
+                scenario_body = "Your personalized story will be delivered on your scheduled date. Mark your calendar!"
         else:
-            delivery_info = f"{giver_name} is asking a grown-up in your life to help create your story. Ask them to check their email for the creation link."
+            status_text = f"✏️ {giver_name} is creating your character..."
+            scenario_body = "Your story will be ready to read very soon! We'll send you another email when it's complete, usually within 1-2 hours."
         
-        # Send the email
-        result = await _send_email(recipient_email, template_id="gift-notification-email", template_data={"recipient_name": recipient_name, "giver_name": giver_name, "occasion": occasion, "gift_message": gift_message, "delivery_info": delivery_info, "current_year": str(datetime.now().year)})
+        # Track gift URL: drawtopia.com/gifts/[giftOrderId]/status
+        track_gift_url = f"{FRONTEND_URL.rstrip('/')}/gifts/{gift_order_id}/status" if gift_order_id else f"{FRONTEND_URL.rstrip('/')}/gifts"
+        
+        template_data = {
+            "recipient_name": recipient_name,
+            "giver_name": giver_name,
+            "occasion": occasion,
+            "gift_message": gift_message,
+            "status_text": status_text,
+            "scenario_body": scenario_body,
+            "track_gift_url": track_gift_url,
+            "current_year": str(datetime.now().year),
+        }
+        
+        # Send the email (subject: "You've been sent a gift on Drawtopia! 🎁✨" — set in Resend template)
+        result = await _send_email(recipient_email, template_id="gift-notification-email", template_data=template_data)
         
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error sending email")
