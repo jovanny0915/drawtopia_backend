@@ -1623,6 +1623,76 @@ class GiftCheckNotificationRequest(BaseModel):
     gift_id: str
 
 
+class AddRecipientCreditOnSendRequest(BaseModel):
+    """Request model for adding recipient credit when sender completes link gift (with notification send + deduct)"""
+    gift_id: str
+
+
+class AddRecipientCreditOnSendResponse(BaseModel):
+    """Response model for add recipient credit on send"""
+    success: bool
+    message: Optional[str] = None
+
+
+@app.post("/api/gifts/add-recipient-credit-on-send", response_model=AddRecipientCreditOnSendResponse)
+@limiter.limit("30/minute")
+async def add_recipient_credit_on_send(request: Request, body: AddRecipientCreditOnSendRequest):
+    """
+    When sender completes a link gift (notification email sent + deduct sender credit),
+    add 1 credit to the recipient (to_user_id). Only for gift_type 'link'.
+    Caller must be the sender (from_user_id).
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    try:
+        authorization = request.headers.get("Authorization")
+        current_user_id = extract_user_from_token(authorization)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        gift_id = body.gift_id.strip()
+        if not gift_id:
+            raise HTTPException(status_code=400, detail="gift_id is required")
+        gift_result = supabase.table("gifts").select("*").eq("id", gift_id).execute()
+        if not gift_result.data or len(gift_result.data) == 0:
+            raise HTTPException(status_code=404, detail="Gift not found")
+        gift = gift_result.data[0]
+        gift_type = (gift.get("gift_type") or "").strip().lower()
+        if gift_type != "link":
+            return AddRecipientCreditOnSendResponse(
+                success=True,
+                message="Not a link gift; no recipient credit added"
+            )
+        from_user_id = gift.get("from_user_id")
+        if not from_user_id or str(from_user_id) != str(current_user_id):
+            raise HTTPException(status_code=403, detail="Only the sender can trigger recipient credit for this gift")
+        to_user_id = gift.get("to_user_id")
+        if not to_user_id:
+            return AddRecipientCreditOnSendResponse(
+                success=True,
+                message="Recipient not yet in system (no to_user_id); no credit added"
+            )
+        credit_result = supabase.table("users").select("credit").eq("id", to_user_id).execute()
+        if not credit_result.data:
+            return AddRecipientCreditOnSendResponse(success=True, message="Recipient user not found")
+        current_credit = credit_result.data[0].get("credit")
+        if current_credit is None:
+            current_credit = 0
+        else:
+            try:
+                current_credit = int(current_credit) if isinstance(current_credit, str) else current_credit
+            except (ValueError, TypeError):
+                current_credit = 0
+        new_credit = current_credit + 1
+        supabase.table("users").update({"credit": new_credit}).eq("id", to_user_id).execute()
+        logger.info(f"Link gift {gift_id}: added 1 credit to recipient {to_user_id}. Credits: {new_credit}")
+        return AddRecipientCreditOnSendResponse(success=True, message="Recipient credit added")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in add_recipient_credit_on_send: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class GiftCheckNotificationResponse(BaseModel):
     """Response model for gift check notification"""
     success: bool
@@ -1687,43 +1757,11 @@ async def check_gift_notification_and_add_credit(request: Request, body: GiftChe
         # Mark gift as checked
         supabase.table("gifts").update({"checked": True}).eq("id", gift_id).execute()
 
-        # Only add 1 credit to the recipient when gift_type is "link" (not "story")
-        gift_type = (gift.get("gift_type") or "").strip().lower()
-        if gift_type == "story":
-            return GiftCheckNotificationResponse(
-                success=True,
-                message="Gift marked as checked (story gift: no credit added)",
-                credit_added=False
-            )
-
-        # Add 1 credit to the recipient for link gifts
-        credit_result = supabase.table("users").select("credit").eq("id", current_user_id).execute()
-        if not credit_result.data:
-            return GiftCheckNotificationResponse(
-                success=True,
-                message="Gift marked as checked",
-                credit_added=False
-            )
-
-        current_credit = credit_result.data[0].get("credit")
-        if current_credit is None:
-            current_credit = 0
-        else:
-            try:
-                current_credit = int(current_credit) if isinstance(current_credit, str) else current_credit
-            except (ValueError, TypeError):
-                current_credit = 0
-
-        new_credit = current_credit + 1
-        supabase.table("users").update({"credit": new_credit}).eq("id", current_user_id).execute()
-
-        logger.info(f"Gift {gift_id} (link) checked; added 1 credit to user {current_user_id}. Credits: {new_credit}")
-
+        # Do not add credit when clicking notification: link gift recipient credit is added at send time (add-recipient-credit-on-send). Story gifts never get recipient credit.
         return GiftCheckNotificationResponse(
             success=True,
-            message="Gift checked and 1 credit added",
-            credit_added=True,
-            remaining_credits=new_credit
+            message="Gift marked as checked",
+            credit_added=False
         )
 
     except HTTPException:
