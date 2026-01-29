@@ -1638,7 +1638,8 @@ async def check_gift_notification_and_add_credit(request: Request, body: GiftChe
     When the recipient clicks a gift notification on the dashboard:
     1) Mark the gift as checked
     2) Add 1 credit to the recipient (to_user_id / current user)
-    Only adds credit once per gift (when first marking as checked).
+    3) Decrease 1 credit from the sender (from_user_id)
+    Only applies credit change once per gift (when first marking as checked).
     """
     if not supabase:
         raise HTTPException(status_code=503, detail="Database is not configured")
@@ -1708,7 +1709,28 @@ async def check_gift_notification_and_add_credit(request: Request, body: GiftChe
         new_credit = current_credit + 1
         supabase.table("users").update({"credit": new_credit}).eq("id", current_user_id).execute()
 
-        logger.info(f"Gift {gift_id} checked; added 1 credit to user {current_user_id}. Credits: {new_credit}")
+        # Decrease 1 credit from the sender (from_user_id)
+        from_user_id = gift.get("from_user_id") or gift.get("user_id")
+        if from_user_id:
+            sender_result = supabase.table("users").select("credit").eq("id", from_user_id).execute()
+            if sender_result.data and len(sender_result.data) > 0:
+                sender_credit = sender_result.data[0].get("credit")
+                if sender_credit is None:
+                    sender_credit = 0
+                else:
+                    try:
+                        sender_credit = int(sender_credit) if isinstance(sender_credit, str) else sender_credit
+                    except (ValueError, TypeError):
+                        sender_credit = 0
+                new_sender_credit = max(0, sender_credit - 1)
+                supabase.table("users").update({"credit": new_sender_credit}).eq("id", from_user_id).execute()
+                logger.info(f"Gift {gift_id}: deducted 1 credit from sender {from_user_id}. Credits: {new_sender_credit}")
+            else:
+                logger.warning(f"Gift {gift_id}: sender {from_user_id} not found in users table, skip deduct")
+        else:
+            logger.warning(f"Gift {gift_id}: no from_user_id, skip deducting sender credit")
+
+        logger.info(f"Gift {gift_id} checked; added 1 credit to recipient {current_user_id}. Credits: {new_credit}")
 
         return GiftCheckNotificationResponse(
             success=True,
