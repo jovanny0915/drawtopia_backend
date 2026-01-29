@@ -1687,7 +1687,16 @@ async def check_gift_notification_and_add_credit(request: Request, body: GiftChe
         # Mark gift as checked
         supabase.table("gifts").update({"checked": True}).eq("id", gift_id).execute()
 
-        # Add 1 credit to the recipient (current user)
+        # Only add 1 credit to the recipient when gift_type is "link" (not "story")
+        gift_type = (gift.get("gift_type") or "").strip().lower()
+        if gift_type == "story":
+            return GiftCheckNotificationResponse(
+                success=True,
+                message="Gift marked as checked (story gift: no credit added)",
+                credit_added=False
+            )
+
+        # Add 1 credit to the recipient for link gifts
         credit_result = supabase.table("users").select("credit").eq("id", current_user_id).execute()
         if not credit_result.data:
             return GiftCheckNotificationResponse(
@@ -1708,7 +1717,7 @@ async def check_gift_notification_and_add_credit(request: Request, body: GiftChe
         new_credit = current_credit + 1
         supabase.table("users").update({"credit": new_credit}).eq("id", current_user_id).execute()
 
-        logger.info(f"Gift {gift_id} checked; added 1 credit to user {current_user_id}. Credits: {new_credit}")
+        logger.info(f"Gift {gift_id} (link) checked; added 1 credit to user {current_user_id}. Credits: {new_credit}")
 
         return GiftCheckNotificationResponse(
             success=True,
