@@ -1,9 +1,6 @@
 """
 Google Vision API service layer for character feature extraction.
-Uses Google Cloud credentials from:
-  - GOOGLE_SERVICE_ACCOUNT_JSON_B64 (recommended): base64-encoded service account JSON
-  - GOOGLE_SERVICE_ACCOUNT_JSON: raw JSON string (minified, one line)
-  - GOOGLE_APPLICATION_CREDENTIALS: base64-encoded service account JSON content (not a file path)
+Uses Google Cloud credentials from GOOGLE_SERVICE_ACCOUNT_JSON_B64 (base64-encoded service account JSON).
 Extracts labels and dominant colors from uploaded drawing images;
 implements retry on timeout (max 2 retries) and structured response-time logging.
 """
@@ -35,55 +32,27 @@ class VisionAPIError(Exception):
 
 def _credentials_from_env():
     """
-    Build Google OAuth2 credentials from env if set.
-    Precedence:
-      1. GOOGLE_SERVICE_ACCOUNT_JSON_B64 – base64-encoded service account JSON
-      2. GOOGLE_SERVICE_ACCOUNT_JSON – raw JSON string
-      3. GOOGLE_APPLICATION_CREDENTIALS – base64-encoded service account JSON (not a file path)
-    Returns None if none set or parsing fails.
+    Build Google OAuth2 credentials from GOOGLE_SERVICE_ACCOUNT_JSON_B64 if set.
+    Returns None if not set or parsing fails.
     """
     import google.oauth2.service_account as sa
 
     b64 = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
-    if b64:
-        try:
-            raw = base64.b64decode(b64.strip()).decode("utf-8")
-            info = json.loads(raw)
-            return sa.Credentials.from_service_account_info(info)
-        except Exception as e:
-            logger.warning("Failed to load GOOGLE_SERVICE_ACCOUNT_JSON_B64: %s", e)
-            return None
-
-    raw_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if raw_json:
-        try:
-            info = json.loads(raw_json.strip())
-            return sa.Credentials.from_service_account_info(info)
-        except Exception as e:
-            logger.warning("Failed to load GOOGLE_SERVICE_ACCOUNT_JSON: %s", e)
-            return None
-
-    # GOOGLE_APPLICATION_CREDENTIALS = base64 of credential JSON content (not a file path)
-    creds_b64 = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if creds_b64:
-        try:
-            raw = base64.b64decode(creds_b64.strip()).decode("utf-8")
-            info = json.loads(raw)
-            return sa.Credentials.from_service_account_info(info)
-        except Exception as e:
-            logger.warning("Failed to load GOOGLE_APPLICATION_CREDENTIALS (base64): %s", e)
-            return None
-
-    return None
+    if not b64:
+        return None
+    try:
+        raw = base64.b64decode(b64.strip()).decode("utf-8")
+        info = json.loads(raw)
+        return sa.Credentials.from_service_account_info(info)
+    except Exception as e:
+        logger.warning("Failed to load GOOGLE_SERVICE_ACCOUNT_JSON_B64: %s", e)
+        return None
 
 
 def get_vision_client():
     """
     Create and return a Google Vision ImageAnnotatorClient.
-    Credentials (in order of precedence):
-      1. GOOGLE_SERVICE_ACCOUNT_JSON_B64 – base64-encoded service account JSON
-      2. GOOGLE_SERVICE_ACCOUNT_JSON – raw JSON string (minified, one line)
-      3. GOOGLE_APPLICATION_CREDENTIALS – base64-encoded service account JSON content (not a file path)
+    Credentials: GOOGLE_SERVICE_ACCOUNT_JSON_B64 (base64-encoded service account JSON).
     Returns None if no credentials are set or client init fails.
     """
     try:
@@ -92,8 +61,7 @@ def get_vision_client():
         credentials = _credentials_from_env()
         if credentials is None:
             logger.info(
-                "No Google credentials set (GOOGLE_SERVICE_ACCOUNT_JSON_B64, "
-                "GOOGLE_SERVICE_ACCOUNT_JSON, or GOOGLE_APPLICATION_CREDENTIALS base64); Vision API disabled."
+                "No Google credentials set (GOOGLE_SERVICE_ACCOUNT_JSON_B64); Vision API disabled."
             )
             return None
 
