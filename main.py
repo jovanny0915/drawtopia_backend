@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, File, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -25,7 +25,7 @@ from google.genai import types
 from google.genai.types import Image as GeminiImage
 from apis import email_api
 from story_lib import generate_story
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from queue_manager import QueueManager
 from batch_processor import BatchProcessor
 from validation_utils import ConsistencyValidationResult
@@ -122,6 +122,10 @@ if SUPABASE_URL:
 else:
     logger.warning("⚠️ Supabase URL not found. Storage upload will be disabled.")
 
+# Google Cloud Vision API (uses existing Google Cloud credentials via GOOGLE_APPLICATION_CREDENTIALS)
+from services.vision_character_features import get_vision_client, extract_character_features, VisionNotConfiguredError, VisionAPIError
+vision_client = get_vision_client()
+
 # Initialize queue manager and batch processor
 queue_manager = None
 batch_processor = None
@@ -136,13 +140,14 @@ async def lifespan(app: FastAPI):
     # if supabase:
     #     queue_manager = QueueManager(supabase)
     #     
-    #     # Initialize batch processor (without email queue manager)
+    #     # Initialize batch processor (with vision_client for mid-generation validation)
     #     batch_processor = BatchProcessor(
     #         queue_manager=queue_manager,
     #         gemini_client=gemini_client,
     #         openai_api_key=OPENAI_API_KEY,
     #         supabase_client=supabase,
-    #         gemini_text_model=GEMINI_TEXT_MODEL
+    #         gemini_text_model=GEMINI_TEXT_MODEL,
+    #         vision_client=vision_client,
     #     )
     #     logger.info("✅ Queue manager and batch processor initialized")
     #     
@@ -229,6 +234,7 @@ from apis.image import router as image_router
 from apis.children import router as children_router
 from apis.character import router as character_router
 from apis.story import router as story_router
+from apis.monitoring import router as monitoring_router
 
 # Helper function to call email API endpoints internally
 async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -256,6 +262,7 @@ app.include_router(image_router)
 app.include_router(children_router)
 app.include_router(character_router)
 app.include_router(story_router)
+app.include_router(monitoring_router)
 
 # Request model to receive input data
 class ImageRequest(BaseModel):
@@ -720,10 +727,19 @@ def edit_image(image_data, prompt, image_url=None):
         logger.error(f"Error calling Gemini API: {e}")
         raise HTTPException(status_code=500, detail=f"Error from Gemini API: {str(e)}")
 
-def validate_character_consistency(scene_image_data: bytes, reference_image_data: bytes, page_number: int, timeout_seconds: int = 15) -> ConsistencyValidationResult:
-    """Wrapper for validation_utils.validate_character_consistency"""
+def validate_character_consistency(
+    scene_image_data: bytes,
+    reference_image_data: bytes,
+    page_number: int,
+    timeout_seconds: int = 15,
+    story_id: Optional[int] = None,
+    character_id: Optional[int] = None,
+    scene_image_url: Optional[str] = None,
+    reference_image_url: Optional[str] = None,
+) -> ConsistencyValidationResult:
+    """Wrapper for validation_utils.validate_character_consistency; logs result to consistency_validation table."""
     from validation_utils import validate_character_consistency as _validate_character_consistency
-    return _validate_character_consistency(
+    result = _validate_character_consistency(
         scene_image_data=scene_image_data,
         reference_image_data=reference_image_data,
         page_number=page_number,
@@ -731,6 +747,124 @@ def validate_character_consistency(scene_image_data: bytes, reference_image_data
         gemini_text_model=GEMINI_TEXT_MODEL,
         timeout_seconds=timeout_seconds
     )
+    log_consistency_validation(
+        result=result,
+        page_number=page_number,
+        story_id=story_id,
+        character_id=character_id,
+        scene_image_url=scene_image_url,
+        reference_image_url=reference_image_url,
+    )
+    return result
+
+
+def log_consistency_validation(
+    result: ConsistencyValidationResult,
+    page_number: int,
+    story_id: Optional[int] = None,
+    character_id: Optional[int] = None,
+    scene_image_url: Optional[str] = None,
+    reference_image_url: Optional[str] = None,
+) -> None:
+    """Log every character comparison to consistency_validation table for analytics and workflow lookup."""
+    if not supabase:
+        return
+    try:
+        confidence = None
+        if result.details and isinstance(result.details, dict):
+            confidence = result.details.get("confidence")
+        row = {
+            "page_number": page_number,
+            "similarity_score": round(float(result.similarity_score), 4),
+            "is_consistent": result.is_consistent,
+            "confidence": round(float(confidence), 4) if confidence is not None else None,
+            "scene_image_url": scene_image_url,
+            "reference_image_url": reference_image_url,
+            "details_json": result.details,
+        }
+        if story_id is not None:
+            row["story_id"] = story_id
+        if character_id is not None:
+            row["character_id"] = character_id
+        supabase.table("consistency_validation").insert(row).execute()
+        logger.debug(f"Logged consistency validation for page {page_number} (score={result.similarity_score:.3f})")
+    except Exception as e:
+        logger.warning(f"Failed to log consistency validation: {e}")
+
+
+@app.post("/api/character/vision/extract")
+@limiter.limit("30/minute")
+async def character_vision_extract(
+    request: Request,
+    image: UploadFile = File(...),
+    character_id: Optional[int] = Query(None),
+    source_image_url: Optional[str] = Query(None),
+):
+    """
+    Character feature extraction via Google Vision API.
+    Accepts an uploaded drawing image, runs Vision API (labels + dominant colors),
+    stores results in character_features and optionally updates character extraction_data.
+    Retries up to 2 times on timeout. Logs API response times.
+    """
+    if not vision_client:
+        raise HTTPException(
+            status_code=503,
+            detail="Vision API not configured. Set GOOGLE_APPLICATION_CREDENTIALS.",
+        )
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available.")
+    # Validate content type
+    ct = (image.content_type or "").lower()
+    if ct and not ct.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image.")
+    try:
+        image_bytes = await image.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read image: {e}")
+    if not image_bytes or len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image empty or too large (max 10MB).")
+    try:
+        features, response_time_ms = extract_character_features(image_bytes, vision_client)
+    except VisionNotConfiguredError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except VisionAPIError as e:
+        logger.error("Vision character feature extraction failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))
+    # Store in character_features
+    row = {
+        "features_json": features,
+        "extraction_model": features.get("extraction_model", "google_vision"),
+        "response_time_ms": response_time_ms,
+        "source_image_url": source_image_url,
+    }
+    if character_id is not None:
+        row["character_id"] = character_id
+    try:
+        ins = supabase.table("character_features").insert(row).execute()
+        feature_row = (ins.data or [None])[0]
+        feature_id = feature_row.get("id") if feature_row else None
+    except Exception as e:
+        logger.error(f"Failed to insert character_features: {e}")
+        raise HTTPException(status_code=500, detail="Failed to store extraction result.")
+    # Optionally sync to characters.extraction_data for generation workflow
+    extraction_for_character = {
+        "labels": features.get("labels", []),
+        "dominant_colors": features.get("dominant_colors", []),
+        "extraction_model": "google_vision",
+        "extraction_timestamp": datetime.utcnow().isoformat(),
+    }
+    if character_id is not None:
+        try:
+            supabase.table("characters").update({"extraction_data": extraction_for_character}).eq("id", character_id).execute()
+        except Exception as e:
+            logger.warning(f"Failed to update character extraction_data: {e}")
+    return {
+        "success": True,
+        "features": features,
+        "character_feature_id": feature_id,
+        "character_id": character_id,
+        "response_time_ms": response_time_ms,
+    }
 
 
 def validate_image_quality(image_data: bytes, image_url: Optional[str] = None) -> Dict[str, Any]:

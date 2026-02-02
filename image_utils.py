@@ -224,11 +224,13 @@ def generate_story_scene_image(
     gemini_client=None,
     supabase_client=None,
     storage_bucket: str = "images",
-    scene_prompt: Optional[str] = None
+    scene_prompt: Optional[str] = None,
+    enhanced_prompt_suffix: Optional[str] = None,
 ) -> str:
     """Generate a scene image for a story page using edit_image function and return the image URL.
     
     If scene_prompt is provided, use it; otherwise generate prompt from parameters.
+    enhanced_prompt_suffix: appended to prompt for regeneration (more specific character descriptors).
     """
     if not gemini_client:
         logger.warning("Gemini client not available, returning empty scene URL")
@@ -333,6 +335,8 @@ ILLUSTRATION REQUIREMENTS:
 {negative_prompts}
 
 Generate a high-quality illustration that perfectly captures this story moment in 768x512 dimensions."""
+        if enhanced_prompt_suffix:
+            prompt = (prompt or "") + enhanced_prompt_suffix
 
         # Use edit_image function to generate the scene
         logger.info(f"Calling edit_image function with prompt for page {page_number}")

@@ -23,6 +23,51 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Vision validation and regeneration (Day 2 requirements).
+# MANUAL REVIEW: See docs/IMPLEMENTATION_NOTES.md — Jovanny may adjust thresholds based on test results.
+CONFIDENCE_THRESHOLD = 80  # Primary characters: require 80% for approval without regeneration (starting point)
+MAX_REGENERATION_ATTEMPTS = 2  # Max 2 regeneration attempts per scene; then approve with warning
+VALIDATION_TIMEOUT_SECONDS = 3  # Validation must complete in 3 seconds or approve scene
+
+
+def _vision_validate_sync(
+    reference_bytes: bytes,
+    scene_bytes: bytes,
+    vision_client: Any,
+) -> tuple:
+    """
+    Synchronous Vision API validation (for use in executor with timeout).
+    Returns (result_dict, confidence_0_100). result_dict includes confidence_score, timed_out, etc.
+    """
+    from services.vision_character_features import validate_scene_against_reference
+    result_dict, confidence = validate_scene_against_reference(
+        reference_bytes, scene_bytes, vision_client
+    )
+    return (result_dict, confidence)
+
+
+def _build_enhanced_prompt_suffix(job_data: Dict[str, Any]) -> str:
+    """
+    Build enhanced prompt suffix with more specific character descriptors for regeneration.
+    Includes color, distinctive marks, and pose guidance to improve consistency.
+    MANUAL REVIEW: Refinements based on test results—see docs/IMPLEMENTATION_NOTES.md.
+    """
+    name = job_data.get("character_name", "the character")
+    char_type = job_data.get("character_type", "")
+    world = job_data.get("story_world", "")
+    parts = [
+        "\n\n=== ENHANCED REGENERATION: STRICT CHARACTER FIDELITY ===",
+        f"PRIMARY CHARACTER: {name} ({char_type}).",
+        "Preserve EXACTLY: skin tone, hair color and style, eye color, clothing colors and design.",
+        "Include any distinctive marks, accessories, or features from the reference.",
+        "Pose the character clearly and prominently; match body proportions to the reference.",
+    ]
+    if world:
+        parts.append(f"Setting: {world}.")
+    parts.append("Do not alter the character's appearance from the reference image.")
+    return " ".join(parts)
+
+
 # Helper function to call email API endpoints internally
 async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -55,7 +100,8 @@ class BatchProcessor:
         gemini_client,
         openai_api_key: str,
         supabase_client,
-        gemini_text_model: str = "gemini-2.5-flash"
+        gemini_text_model: str = "gemini-2.5-flash",
+        vision_client=None,
     ):
         self.queue_manager = queue_manager
         self.gemini_client = gemini_client
@@ -63,6 +109,7 @@ class BatchProcessor:
         self.supabase = supabase_client
         self.storage_bucket = "images"
         self.gemini_text_model = gemini_text_model
+        self.vision_client = vision_client
     
     async def process_job(self, job_id: int) -> bool:
         """
@@ -215,12 +262,18 @@ class BatchProcessor:
                     )
                     return False
                 else:
-                    scene_urls.append(result)
+                    scene_url, validation_data = result
+                    scene_urls.append(scene_url)
+                    validation = validation_data.get("validation", {}) if isinstance(validation_data, dict) else {}
                     self.queue_manager.update_stage_status(
                         stage["id"],
                         StageStatus.COMPLETED,
                         progress_percentage=100,
-                        result_data={"scene_url": result}
+                        result_data={
+                            "scene_url": scene_url,
+                            "validation": validation,
+                            "confidence_score": validation.get("confidence_score"),
+                        }
                     )
             
             # Stage 4: Consistency Validation (2 scenes)
@@ -405,12 +458,18 @@ class BatchProcessor:
                     )
                     return False
                 else:
-                    scene_urls.append(result)
+                    scene_url, validation_data = result
+                    scene_urls.append(scene_url)
+                    validation = validation_data.get("validation", {}) if isinstance(validation_data, dict) else {}
                     self.queue_manager.update_stage_status(
                         stage["id"],
                         StageStatus.COMPLETED,
                         progress_percentage=100,
-                        result_data={"scene_url": result}
+                        result_data={
+                            "scene_url": scene_url,
+                            "validation": validation,
+                            "confidence_score": validation.get("confidence_score"),
+                        }
                     )
             
             # Stage 5: Consistency Validation (5 scenes)
@@ -541,8 +600,66 @@ class BatchProcessor:
         if character_data.get("original_image_url"):
             return [character_data["original_image_url"]]
         return []
-    
-    
+
+    async def _run_vision_validation_with_timeout(
+        self,
+        scene_url: str,
+        reference_image_url: Optional[str],
+        job_id: int,
+        scene_index: int,
+    ) -> tuple:
+        """
+        Run Vision API validation with 3-second timeout. Does not block the user.
+        On timeout or missing reference, approves scene (returns confidence 100).
+        Returns (result_dict, confidence_0_100). result_dict includes confidence_score, timed_out, etc.
+        """
+        if not scene_url:
+            return ({"confidence_score": 100, "skipped": True, "reason": "no_scene_url"}, 100)
+        if not reference_image_url:
+            return ({"confidence_score": 100, "skipped": True, "reason": "no_reference"}, 100)
+        from image_utils import download_image_from_url
+        try:
+            loop = asyncio.get_event_loop()
+            ref_bytes = await loop.run_in_executor(None, lambda: download_image_from_url(reference_image_url))
+            scene_bytes = await loop.run_in_executor(None, lambda: download_image_from_url(scene_url))
+        except Exception as e:
+            logger.warning("Failed to download images for validation job_id=%s scene_index=%s: %s", job_id, scene_index, e)
+            return ({"confidence_score": 100, "skipped": True, "error": str(e)}, 100)
+        try:
+            loop = asyncio.get_event_loop()
+            result_dict, confidence = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    _vision_validate_sync,
+                    ref_bytes,
+                    scene_bytes,
+                    self.vision_client,
+                ),
+                timeout=VALIDATION_TIMEOUT_SECONDS,
+            )
+            if result_dict.get("timed_out"):
+                result_dict["confidence_score"] = 100
+                return (result_dict, 100)
+            logger.info(
+                "scene_validation_complete job_id=%s scene_index=%s confidence=%s",
+                job_id, scene_index, confidence,
+                extra={"job_id": job_id, "scene_index": scene_index, "confidence_score": confidence},
+            )
+            return (result_dict, confidence)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "scene_validation_timeout job_id=%s scene_index=%s (approved in %ss)",
+                job_id, scene_index, VALIDATION_TIMEOUT_SECONDS,
+                extra={"job_id": job_id, "scene_index": scene_index},
+            )
+            return (
+                {"confidence_score": 100, "timed_out": True, "reason": "validation_timeout"},
+                100,
+            )
+        except Exception as e:
+            logger.warning("Vision validation error job_id=%s scene_index=%s: %s (approving scene)", job_id, scene_index, e)
+            return ({"confidence_score": 100, "skipped": True, "error": str(e)}, 100)
+
     async def _create_scene(
         self,
         job_id: int,
@@ -551,16 +668,14 @@ class BatchProcessor:
         character_data: Dict[str, Any],
         enhanced_images: List[str],
         job_data: Dict[str, Any]
-    ) -> str:
-        """Create a scene image for Interactive Search"""
+    ) -> tuple:
+        """Create a scene image for Interactive Search. Returns (scene_url, validation_data)."""
         try:
-            from image_utils import generate_story_scene_image
-            
-            # Create a simple scene description for interactive search
+            from image_utils import generate_story_scene_image, download_image_from_url
+
             scene_description = f"Scene {scene_index + 1} featuring {job_data.get('character_name', 'the character')} in {job_data.get('story_world', 'a magical world')}"
-            
             reference_image_url = enhanced_images[0] if enhanced_images else character_data.get("original_image_url")
-            
+
             scene_url = generate_story_scene_image(
                 story_page_text=scene_description,
                 page_number=scene_index + 1,
@@ -572,12 +687,55 @@ class BatchProcessor:
                 supabase_client=self.supabase,
                 storage_bucket=self.storage_bucket
             )
-            
-            # Update progress
             self.queue_manager.update_stage_status(stage_id, StageStatus.PROCESSING, progress_percentage=100)
-            
-            return scene_url
-            
+
+            validation_result, confidence = await self._run_vision_validation_with_timeout(
+                scene_url, reference_image_url, job_id, scene_index
+            )
+            logger.info(
+                "scene_validation_confidence job_id=%s scene_index=%s confidence=%s",
+                job_id, scene_index, validation_result.get("confidence_score", 0),
+                extra={"job_id": job_id, "scene_index": scene_index, "confidence_score": validation_result.get("confidence_score")}
+            )
+
+            regeneration_count = 0
+            enhanced_suffix = _build_enhanced_prompt_suffix(job_data)
+            while confidence < CONFIDENCE_THRESHOLD and regeneration_count < MAX_REGENERATION_ATTEMPTS:
+                regeneration_count += 1
+                logger.info(
+                    "scene_regeneration job_id=%s scene_index=%s attempt=%s (confidence %s < %s)",
+                    job_id, scene_index, regeneration_count, confidence, CONFIDENCE_THRESHOLD
+                )
+                scene_url = generate_story_scene_image(
+                    story_page_text=scene_description,
+                    page_number=scene_index + 1,
+                    character_name=job_data.get("character_name", ""),
+                    character_type=job_data.get("character_type", ""),
+                    story_world=job_data.get("story_world", ""),
+                    reference_image_url=reference_image_url,
+                    gemini_client=self.gemini_client,
+                    supabase_client=self.supabase,
+                    storage_bucket=self.storage_bucket,
+                    enhanced_prompt_suffix=enhanced_suffix
+                )
+                validation_result, confidence = await self._run_vision_validation_with_timeout(
+                    scene_url, reference_image_url, job_id, scene_index
+                )
+                logger.info(
+                    "scene_validation_confidence job_id=%s scene_index=%s after_regeneration attempt=%s confidence=%s",
+                    job_id, scene_index, regeneration_count, validation_result.get("confidence_score", 0),
+                    extra={"job_id": job_id, "scene_index": scene_index, "regeneration_attempt": regeneration_count, "confidence_score": validation_result.get("confidence_score")}
+                )
+
+            validation_result["regeneration_count"] = regeneration_count
+            validation_result["approved_with_warning"] = confidence < CONFIDENCE_THRESHOLD
+            if validation_result.get("approved_with_warning"):
+                logger.warning(
+                    "scene_approved_with_warning job_id=%s scene_index=%s confidence=%s (below %s after %s regens)",
+                    job_id, scene_index, confidence, CONFIDENCE_THRESHOLD, regeneration_count
+                )
+            return (scene_url, {"scene_url": scene_url, "validation": validation_result})
+
         except Exception as e:
             logger.error(f"Error creating scene {scene_index} for job {job_id}: {e}")
             raise
@@ -591,13 +749,13 @@ class BatchProcessor:
         character_data: Dict[str, Any],
         enhanced_images: List[str],
         job_data: Dict[str, Any]
-    ) -> str:
-        """Create a story scene image"""
+    ) -> tuple:
+        """Create a story scene image with mid-generation Vision validation and optional regeneration. Returns (scene_url, validation_data)."""
         try:
             from image_utils import generate_story_scene_image
-            
+
             reference_image_url = enhanced_images[0] if enhanced_images else character_data.get("original_image_url")
-            
+
             scene_url = generate_story_scene_image(
                 story_page_text=page_text,
                 page_number=scene_index + 1,
@@ -607,14 +765,57 @@ class BatchProcessor:
                 reference_image_url=reference_image_url,
                 gemini_client=self.gemini_client,
                 supabase_client=self.supabase,
-                storage_bucket=self.storage_bucket
+                storage_bucket=self.storage_bucket,
             )
-            
-            # Update progress
             self.queue_manager.update_stage_status(stage_id, StageStatus.PROCESSING, progress_percentage=100)
-            
-            return scene_url
-            
+
+            validation_result, confidence = await self._run_vision_validation_with_timeout(
+                scene_url, reference_image_url, job_id, scene_index
+            )
+            logger.info(
+                "scene_validation_confidence job_id=%s scene_index=%s confidence=%s",
+                job_id, scene_index, validation_result.get("confidence_score", 0),
+                extra={"job_id": job_id, "scene_index": scene_index, "confidence_score": validation_result.get("confidence_score")},
+            )
+
+            regeneration_count = 0
+            enhanced_suffix = _build_enhanced_prompt_suffix(job_data)
+            while confidence < CONFIDENCE_THRESHOLD and regeneration_count < MAX_REGENERATION_ATTEMPTS:
+                regeneration_count += 1
+                logger.info(
+                    "scene_regeneration job_id=%s scene_index=%s attempt=%s (confidence %s < %s)",
+                    job_id, scene_index, regeneration_count, confidence, CONFIDENCE_THRESHOLD,
+                )
+                scene_url = generate_story_scene_image(
+                    story_page_text=page_text,
+                    page_number=scene_index + 1,
+                    character_name=job_data.get("character_name", ""),
+                    character_type=job_data.get("character_type", ""),
+                    story_world=job_data.get("story_world", ""),
+                    reference_image_url=reference_image_url,
+                    gemini_client=self.gemini_client,
+                    supabase_client=self.supabase,
+                    storage_bucket=self.storage_bucket,
+                    enhanced_prompt_suffix=enhanced_suffix,
+                )
+                validation_result, confidence = await self._run_vision_validation_with_timeout(
+                    scene_url, reference_image_url, job_id, scene_index
+                )
+                logger.info(
+                    "scene_validation_confidence job_id=%s scene_index=%s after_regeneration attempt=%s confidence=%s",
+                    job_id, scene_index, regeneration_count, validation_result.get("confidence_score", 0),
+                    extra={"job_id": job_id, "scene_index": scene_index, "regeneration_attempt": regeneration_count, "confidence_score": validation_result.get("confidence_score")},
+                )
+
+            validation_result["regeneration_count"] = regeneration_count
+            validation_result["approved_with_warning"] = confidence < CONFIDENCE_THRESHOLD
+            if validation_result.get("approved_with_warning"):
+                logger.warning(
+                    "scene_approved_with_warning job_id=%s scene_index=%s confidence=%s (below %s after %s regens)",
+                    job_id, scene_index, confidence, CONFIDENCE_THRESHOLD, regeneration_count,
+                )
+            return (scene_url, {"scene_url": scene_url, "validation": validation_result})
+
         except Exception as e:
             logger.error(f"Error creating story scene {scene_index} for job {job_id}: {e}")
             raise

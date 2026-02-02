@@ -14,7 +14,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, SearchGameResultRequest
+from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest
 
 if TYPE_CHECKING:
     import main
@@ -336,13 +336,12 @@ async def delete_book(request: Request, id: str):
         raise HTTPException(status_code=500, detail=f"Error deleting book: {str(e)}")
 
 
-@router.post("/generate-story/")
+@router.post("/story/generate-text")
 @limiter.limit("10/minute")
-async def generate_story_endpoint(request: Request, body: StoryRequest):
-    """Generate a 5-page children's story based on the provided parameters"""
+async def generate_story_text_endpoint(request: Request, body: StoryRequest):
+    """Generate story text only (5-page children's story)"""
     import main  # Import here to avoid circular import
     try:
-        # Validate age_group
         valid_age_groups = ["3-6", "7-10", "11-12"]
         if body.age_group not in valid_age_groups:
             raise HTTPException(
@@ -350,23 +349,14 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
                 detail=f"Invalid age_group: {body.age_group}. Must be one of: {', '.join(valid_age_groups)}"
             )
         
-        main.logger.info(f"Generating story for character: {body.character_name}")
-        main.logger.info(f"Age group: {body.age_group}, Adventure: {body.adventure_type}")
+        main.logger.info(f"Generating story text for character: {body.character_name}")
         
-        # Validate API keys
         if not main.OPENAI_API_KEY:
             raise HTTPException(
                 status_code=500,
                 detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             )
         
-        if not main.GEMINI_API_KEY or not main.gemini_client:
-            raise HTTPException(
-                status_code=500,
-                detail="Gemini API key not configured or client not initialized. Please set GEMINI_API_KEY environment variable."
-            )
-        
-        # Generate the story using OpenAI (GPT-4) via the story library
         main.logger.info("Generating story with OpenAI GPT-4...")
         story_result = generate_story(
             character_name=body.character_name,
@@ -376,45 +366,61 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
             story_world=body.story_world,
             adventure_type=body.adventure_type,
             occasion_theme=body.occasion_theme,
-            use_api=True,  # Use OpenAI API for story generation
+            use_api=True,
             api_key=main.OPENAI_API_KEY,
-            story_text_prompt=body.story_text_prompt  # Use prompt from frontend if provided
+            story_text_prompt=body.story_text_prompt
         )
         
-        main.logger.info(f"Story generated successfully. Word count: {story_result['word_count']}")
+        main.logger.info(f"Story text generated successfully. Word count: {story_result['word_count']}")
         
-        # Generate dedication image FIRST before story images (if dedication info is provided)
+        return {
+            "success": True,
+            "pages": story_result["pages"],
+            "full_story": story_result["full_story"],
+            "word_count": story_result["word_count"],
+            "page_word_counts": story_result["page_word_counts"],
+        }
+        
+    except ValueError as e:
+        main.logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Unexpected error in generate_story_text_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post("/story/generate-scenes")
+@limiter.limit("10/minute")
+async def generate_story_scenes_endpoint(request: Request, body: StoryScenesRequest):
+    """Generate scene images for story pages (dedication + 5 story pages)"""
+    import main  # Import here to avoid circular import
+    try:
+        if not main.GEMINI_API_KEY or not main.gemini_client:
+            raise HTTPException(
+                status_code=500,
+                detail="Gemini API key not configured or client not initialized. Please set GEMINI_API_KEY environment variable."
+            )
+        
+        main.logger.info(f"Generating story scenes for character: {body.character_name}")
+        
+        # Generate dedication image FIRST (if dedication info is provided)
         dedication_image_url = None
         if body.dedication_text and body.dedication_scene_prompt:
             main.logger.info("Generating dedication page image...")
             try:
-                # Get reference character image URL if available
                 dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
-                if dedication_reference_image_url:
-                    main.logger.info(f"Using character reference image for dedication page: {dedication_reference_image_url}")
-                
-                # Create blank base image for dedication (typically portrait format for dedication pages)
-                dedication_base_image = main.create_blank_base_image(width=768, height=1024)  # Portrait format
-                
-                # Use edit_image function to generate the dedication image with character reference
-                main.logger.info("Calling edit_image function for dedication page...")
+                dedication_base_image = main.create_blank_base_image(width=768, height=1024)
                 dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
-                
-                # Optimize image to JPG format
-                main.logger.info("Optimizing dedication image to JPG format...")
                 optimized_dedication_image = main.optimize_image_to_jpg(dedication_image_bytes)
-                
-                # Generate unique filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 unique_id = str(uuid.uuid4())[:8]
                 dedication_filename = f"dedication_{timestamp}_{unique_id}.jpg"
-                
-                # Upload to Supabase and get URL
                 dedication_storage_result = main.upload_to_supabase(optimized_dedication_image, dedication_filename)
-                
                 if dedication_storage_result.get("uploaded") and dedication_storage_result.get("url"):
-                    dedication_image_url = dedication_storage_result['url']
-                    main.logger.info(f"✅ Dedication image generated and uploaded: {dedication_image_url}")
+                    dedication_image_url = dedication_storage_result["url"]
+                    main.logger.info(f"✅ Dedication image generated: {dedication_image_url}")
                 else:
                     main.logger.warning("Failed to upload dedication image")
             except Exception as e:
@@ -422,37 +428,29 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
                 import traceback
                 main.logger.debug(f"Traceback: {traceback.format_exc()}")
         
-        # Generate scene images for each page using Gemini Pro image preview model
-        main.logger.info("Generating scene images with Gemini Pro image preview model for each story page...")
+        # Generate scene images for each page
+        main.logger.info("Generating scene images for each story page...")
         reference_image_url = str(body.character_image_url) if body.character_image_url else None
         
-        # Download reference image once for consistency validation
         reference_image_data = None
         if reference_image_url:
             try:
-                main.logger.info(f"Downloading reference image for consistency validation: {reference_image_url}")
                 reference_image_data = main.download_image_from_url(reference_image_url)
-                main.logger.info(f"✅ Reference image downloaded for validation ({len(reference_image_data)} bytes)")
             except Exception as e:
-                main.logger.warning(f"Failed to download reference image for validation: {e}")
-                reference_image_data = None
+                main.logger.warning(f"Failed to download reference image: {e}")
         
         story_pages = []
         consistency_results = []
         flagged_pages = []
         
-        for i, page_text in enumerate(story_result['pages'], 1):
+        for i, page_text in enumerate(body.pages[:5], 1):  # Max 5 pages
             main.logger.info(f"Generating scene image for page {i}/5...")
-            # Use scene prompt from frontend if available, otherwise use None (will generate from params)
             scene_prompt = None
             if body.scene_prompts and len(body.scene_prompts) >= i:
-                scene_prompt = body.scene_prompts[i - 1]  # i is 1-indexed, list is 0-indexed
-                # Replace placeholder with actual page text
-                scene_prompt = scene_prompt.replace(
+                scene_prompt = body.scene_prompts[i - 1].replace(
                     f"[Page {i} text will be inserted here after story generation]",
                     page_text
                 )
-                main.logger.info(f"Using scene prompt from frontend for page {i} (with actual page text)")
             
             scene_url = main.generate_story_scene_image(
                 story_page_text=page_text,
@@ -463,7 +461,7 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
                 reference_image_url=reference_image_url,
                 scene_prompt=scene_prompt
             )
-            # Convert string URL to HttpUrl if not empty, otherwise None
+            
             scene_http_url = None
             scene_image_data = None
             consistency_validation = None
@@ -471,148 +469,36 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
             if scene_url:
                 try:
                     scene_http_url = HttpUrl(scene_url)
-                    # Download scene image for consistency validation
                     try:
                         scene_image_data = main.download_image_from_url(scene_url)
-                        main.logger.info(f"✅ Scene image downloaded for validation ({len(scene_image_data)} bytes)")
-                    except Exception as e:
-                        main.logger.warning(f"Failed to download scene image for validation: {e}")
+                    except Exception:
+                        pass
                 except Exception as e:
                     main.logger.warning(f"Invalid scene URL for page {i}: {e}")
-                    scene_http_url = None
             
-            # Perform character consistency validation if both images are available
             if reference_image_data and scene_image_data:
-                main.logger.info(f"Performing character consistency validation for page {i}...")
                 try:
                     consistency_validation = main.validate_character_consistency(
                         scene_image_data=scene_image_data,
                         reference_image_data=reference_image_data,
                         page_number=i,
-                        timeout_seconds=15
+                        timeout_seconds=15,
+                        scene_image_url=scene_url,
+                        reference_image_url=reference_image_url,
                     )
                     consistency_results.append(consistency_validation)
-                    
                     if consistency_validation.flagged:
                         flagged_pages.append(i)
-                        main.logger.warning(f"⚠️ Page {i} flagged as INCONSISTENT (similarity: {consistency_validation.similarity_score:.3f})")
-                    else:
-                        main.logger.info(f"✅ Page {i} validated as CONSISTENT (similarity: {consistency_validation.similarity_score:.3f})")
                 except Exception as e:
                     main.logger.error(f"Error during consistency validation for page {i}: {e}")
-                    import traceback
-                    main.logger.debug(f"Traceback: {traceback.format_exc()}")
-            elif not reference_image_data:
-                main.logger.info(f"Skipping consistency validation for page {i} - no reference image available")
-            elif not scene_image_data:
-                main.logger.warning(f"Skipping consistency validation for page {i} - scene image not available")
             
             story_pages.append(main.StoryPage(
-                text=page_text, 
+                text=page_text,
                 scene=scene_http_url,
                 consistency_validation=consistency_validation
             ))
         
         main.logger.info("All scene images generated successfully")
-        
-        # Generate audio for all story pages
-        main.logger.info("Generating audio for story pages...")
-        audio_urls = []
-        audio_generator = None
-        
-        if main.supabase:
-            try:
-                audio_generator = AudioGenerator()
-                if audio_generator.available:
-                    # Generate audio for all pages
-                    audio_data_list = audio_generator.generate_audio_for_story(
-                        story_pages=story_result['pages'],
-                        age_group=body.age_group,
-                        timeout_per_page=60
-                    )
-                    
-                    # Upload audio files to Supabase storage
-                    for i, audio_data in enumerate(audio_data_list, 1):
-                        if audio_data is None:
-                            main.logger.warning(f"⚠️ No audio generated for page {i}, skipping upload")
-                            audio_urls.append(None)
-                            continue
-                        
-                        # Generate unique filename
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        unique_id = str(uuid.uuid4())[:8]
-                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
-                        
-                        # Upload to Supabase storage (try audio bucket first, fallback to images)
-                        storage_bucket = "audio"
-                        audio_url = None
-                        
-                        try:
-                            # Try audio bucket first
-                            try:
-                                response = main.supabase.storage.from_(storage_bucket).upload(
-                                    filename,
-                                    audio_data,
-                                    {
-                                        'content-type': 'audio/mpeg',
-                                        'upsert': 'true'
-                                    }
-                                )
-                            except Exception as e:
-                                # If audio bucket doesn't exist, use images bucket
-                                main.logger.warning(f"Audio bucket not found, using images bucket: {e}")
-                                storage_bucket = "images"
-                                response = main.supabase.storage.from_(storage_bucket).upload(
-                                    filename,
-                                    audio_data,
-                                    {
-                                        'content-type': 'audio/mpeg',
-                                        'upsert': 'true'
-                                    }
-                                )
-                            
-                            if hasattr(response, 'full_path') and response.full_path:
-                                audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
-                                audio_urls.append(audio_url)
-                                main.logger.info(f"✅ Uploaded audio for page {i}: {audio_url}")
-                            else:
-                                main.logger.error(f"❌ Failed to upload audio for page {i}: Unexpected response")
-                                audio_urls.append(None)
-                        except Exception as e:
-                            main.logger.error(f"❌ Error uploading audio for page {i} to Supabase: {e}")
-                            audio_urls.append(None)
-                        
-                    successful_uploads = sum(1 for url in audio_urls if url is not None)
-                    if successful_uploads > 0:
-                        main.logger.info(f"✅ Generated and uploaded {successful_uploads}/5 audio files")
-                    else:
-                        main.logger.warning("⚠️ Failed to generate/upload any audio files")
-                    
-                    # Update StoryPage objects with audio URLs (recreate since Pydantic models are immutable)
-                    updated_story_pages = []
-                    for idx, page in enumerate(story_pages):
-                        audio_http_url = None
-                        if idx < len(audio_urls) and audio_urls[idx]:
-                            try:
-                                audio_http_url = HttpUrl(audio_urls[idx])
-                            except Exception as e:
-                                main.logger.warning(f"Failed to create HttpUrl for audio on page {idx + 1}: {e}")
-                        
-                        updated_story_pages.append(main.StoryPage(
-                            text=page.text,
-                            scene=page.scene,
-                            audio=audio_http_url,
-                            consistency_validation=page.consistency_validation
-                        ))
-                    story_pages = updated_story_pages
-                else:
-                    main.logger.warning("⚠️ Audio generator not available. Install: pip install gtts>=2.5.0")
-            except Exception as e:
-                main.logger.error(f"Error during audio generation: {e}")
-                import traceback
-                main.logger.debug(f"Traceback: {traceback.format_exc()}")
-        else:
-            main.logger.warning("⚠️ Supabase not configured, skipping audio generation")
         
         # Create consistency summary
         consistency_summary = None
@@ -622,7 +508,6 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
             max_score = max(r.similarity_score for r in consistency_results)
             total_validation_time = sum(r.validation_time_seconds for r in consistency_results)
             consistent_count = sum(1 for r in consistency_results if r.is_consistent)
-            
             consistency_summary = {
                 "total_pages_validated": len(consistency_results),
                 "consistent_pages": consistent_count,
@@ -635,43 +520,107 @@ async def generate_story_endpoint(request: Request, body: StoryRequest):
                 "average_validation_time_seconds": round(total_validation_time / len(consistency_results), 2),
                 "all_consistent": len(flagged_pages) == 0
             }
-            
-            main.logger.info("=" * 60)
-            main.logger.info("CHARACTER CONSISTENCY VALIDATION SUMMARY")
-            main.logger.info("=" * 60)
-            main.logger.info(f"Total pages validated: {consistency_summary['total_pages_validated']}")
-            main.logger.info(f"Consistent pages: {consistency_summary['consistent_pages']}")
-            main.logger.info(f"Inconsistent pages: {consistency_summary['inconsistent_pages']}")
-            if flagged_pages:
-                main.logger.warning(f"⚠️ Flagged pages (inconsistent): {flagged_pages}")
-            main.logger.info(f"Average similarity score: {avg_score:.3f}")
-            main.logger.info(f"Score range: {min_score:.3f} - {max_score:.3f}")
-            main.logger.info(f"Total validation time: {total_validation_time:.2f}s")
-            main.logger.info(f"Average validation time per page: {total_validation_time / len(consistency_results):.2f}s")
-            main.logger.info("=" * 60)
         
-        # Story saving is now handled on the frontend
-        main.logger.info("Story generation completed. Frontend will handle saving to database.")
+        return {
+            "success": True,
+            "pages": [
+                {
+                    "text": p.text,
+                    "scene": str(p.scene) if p.scene else None,
+                    "consistency_validation": p.consistency_validation.model_dump() if p.consistency_validation is not None else None
+                }
+                for p in story_pages
+            ],
+            "dedication_image_url": dedication_image_url,
+            "consistency_summary": consistency_summary,
+        }
         
-        return main.StoryResponse(
-            success=True,
-            pages=story_pages,
-            full_story=story_result['full_story'],
-            word_count=story_result['word_count'],
-            page_word_counts=story_result['page_word_counts'],
-            consistency_summary=consistency_summary,
-            audio_urls=audio_urls if audio_urls else None,
-            dedication_image_url=dedication_image_url
-        )
-        
-    except ValueError as e:
-        main.logger.error(f"Validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException as e:
-        main.logger.error(f"HTTP Exception: {e.detail}")
         raise e
     except Exception as e:
-        main.logger.error(f"Unexpected error in generate_story_endpoint: {e}")
+        main.logger.error(f"Unexpected error in generate_story_scenes_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post("/story/generate-audio")
+@limiter.limit("10/minute")
+async def generate_story_audio_endpoint(request: Request, body: StoryAudioRequest):
+    """Generate audio for story pages"""
+    import main  # Import here to avoid circular import
+    try:
+        valid_age_groups = ["3-6", "7-10", "11-12"]
+        if body.age_group not in valid_age_groups:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid age_group: {body.age_group}. Must be one of: {', '.join(valid_age_groups)}"
+            )
+        
+        main.logger.info("Generating audio for story pages...")
+        
+        audio_urls = []
+        
+        if main.supabase:
+            try:
+                audio_generator = AudioGenerator()
+                if audio_generator.available:
+                    audio_data_list = audio_generator.generate_audio_for_story(
+                        story_pages=body.pages,
+                        age_group=body.age_group,
+                        timeout_per_page=60
+                    )
+                    
+                    for i, audio_data in enumerate(audio_data_list, 1):
+                        if audio_data is None:
+                            audio_urls.append(None)
+                            continue
+                        
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        unique_id = str(uuid.uuid4())[:8]
+                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                        storage_bucket = "audio"
+                        audio_url = None
+                        
+                        try:
+                            try:
+                                response = main.supabase.storage.from_(storage_bucket).upload(
+                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                                )
+                            except Exception:
+                                storage_bucket = "images"
+                                response = main.supabase.storage.from_(storage_bucket).upload(
+                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                                )
+                            
+                            if hasattr(response, "full_path") and response.full_path:
+                                audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
+                                main.logger.info(f"✅ Uploaded audio for page {i}: {audio_url}")
+                        except Exception as e:
+                            main.logger.error(f"Error uploading audio for page {i}: {e}")
+                        
+                        audio_urls.append(audio_url)
+                    
+                    if sum(1 for u in audio_urls if u) > 0:
+                        main.logger.info(f"✅ Generated and uploaded {sum(1 for u in audio_urls if u)}/5 audio files")
+                    else:
+                        main.logger.warning("⚠️ Failed to generate/upload any audio files")
+                else:
+                    main.logger.warning("⚠️ Audio generator not available")
+            except Exception as e:
+                main.logger.error(f"Error during audio generation: {e}")
+                import traceback
+                main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        else:
+            main.logger.warning("⚠️ Supabase not configured, skipping audio generation")
+        
+        return {
+            "success": True,
+            "audio_urls": audio_urls,
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Unexpected error in generate_story_audio_endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 

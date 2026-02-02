@@ -53,6 +53,24 @@ class SceneResult(BaseModel):
     star_rate: int  # 0-3 stars
 
 
+class StoryScenesRequest(BaseModel):
+    """Request model for generating story scene images"""
+    pages: List[str]  # Story page texts (output from generate-story-text)
+    character_name: str
+    character_type: str
+    story_world: str
+    character_image_url: Optional[HttpUrl] = None
+    scene_prompts: Optional[List[str]] = None  # List of 5 scene prompts, one per page
+    dedication_text: Optional[str] = None
+    dedication_scene_prompt: Optional[str] = None
+
+
+class StoryAudioRequest(BaseModel):
+    """Request model for generating story audio"""
+    pages: List[str]  # Story page texts (output from generate-story-text)
+    age_group: str  # Must be "3-6", "7-10", or "11-12"
+
+
 class SearchGameResultRequest(BaseModel):
     """Request model for saving search game results"""
     character_id: int

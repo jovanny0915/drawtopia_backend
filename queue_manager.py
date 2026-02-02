@@ -441,6 +441,42 @@ class QueueManager:
             logger.error(f"Error getting job stages: {e}")
             return []
     
+    def get_recent_completed_jobs(
+        self,
+        job_type: Optional[str] = None,
+        since_hours: Optional[float] = 24,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent completed jobs for metrics and dashboard.
+        Returns list of jobs with stages populated (for validation metrics).
+        """
+        def _get():
+            from datetime import datetime, timedelta
+            query = (
+                self.supabase.table("book_generation_jobs")
+                .select("*")
+                .eq("status", JobStatus.COMPLETED.value)
+                .order("completed_at", desc=True)
+                .limit(limit)
+            )
+            if job_type:
+                query = query.eq("job_type", job_type)
+            result = query.execute()
+            jobs = result.data if result.data else []
+            if since_hours is not None:
+                since_str = (datetime.utcnow() - timedelta(hours=since_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+                jobs = [j for j in jobs if (j.get("completed_at") or "") >= since_str]
+            for job in jobs:
+                job["stages"] = self.get_job_stages(job["id"])
+            return jobs
+
+        try:
+            return self._retry_on_ssl_error(_get)
+        except Exception as e:
+            logger.error(f"Error getting recent completed jobs: {e}")
+            return []
+
     def get_job_status(self, job_id: int) -> Optional[Dict[str, Any]]:
         """Get job status with all stages"""
         def _get_job():
