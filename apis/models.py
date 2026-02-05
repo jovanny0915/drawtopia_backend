@@ -113,6 +113,7 @@ class UpdateStoryStateRequest(BaseModel):
     dedication_text: Optional[str] = None
     dedication_image: Optional[str] = None
     story_cover: Optional[str] = None
+    id: Optional[str] = None  # Story ID to update
 
 
 class SearchGameResultRequest(BaseModel):
