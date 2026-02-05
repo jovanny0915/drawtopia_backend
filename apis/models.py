@@ -106,6 +106,7 @@ class SaveStoryDraftRequest(BaseModel):
 
 class UpdateStoryStateRequest(BaseModel):
     """Request model for updating story state (generating / completed)"""
+    id: str  # Story ID (uid or numeric id)
     state: Optional[str] = "generating"  # "generating" or "completed"; default when omitted
     story_content: Optional[str] = None  # JSON string when state=completed
     scene_images: Optional[List[str]] = None

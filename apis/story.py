@@ -401,16 +401,17 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
         raise HTTPException(status_code=500, detail=f"Error saving story draft: {str(e)}")
 
 
-@router.patch("/api/books/{id}/state")
+@router.post("/api/books/update-state")
 @limiter.limit("60/minute")
-async def update_story_state(request: Request, id: str, body: UpdateStoryStateRequest):
+async def update_story_state(request: Request, body: UpdateStoryStateRequest):
     """
     Update story state (status): "generating" (before generation) or "completed" (after success).
     When state is "completed", optional story_content, scene_images, audio_urls, etc. are persisted.
+    The story ID is provided in the request body.
     """
     import main  # Import here to avoid circular import
     try:
-        main.logger.info(f"[update_story_state] Received request - method={request.method} url={request.url} id={id}")
+        main.logger.info(f"[update_story_state] Received request - method={request.method} url={request.url}")
         main.logger.info(f"[update_story_state] Body data: {body.model_dump()}")
         
         if not main.supabase:
@@ -418,11 +419,20 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
                 status_code=500,
                 detail="Database service not available"
             )
+        
+        # Get story ID from body
+        story_id = body.id
+        if not story_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Story ID is required in request body"
+            )
+        
         # Get state value with proper defaulting and normalization
         state_value = body.state if body.state is not None else "generating"
         state = state_value.strip().lower() if isinstance(state_value, str) else "generating"
         
-        main.logger.info(f"[update_story_state] Normalized state: '{state}' (type: {type(state).__name__})")
+        main.logger.info(f"[update_story_state] Story ID: {story_id}, Normalized state: '{state}' (type: {type(state).__name__})")
         
         valid_states = ("generating", "completed")
         if state not in valid_states:
@@ -431,13 +441,23 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
                 status_code=400,
                 detail=f"state must be 'generating' or 'completed' (got: '{state}')"
             )
+        
         # Resolve story by uid or numeric id
-        story_response = main.supabase.table("stories").select("*").eq("uid", id).execute()
+        story_response = main.supabase.table("stories").select("*").eq("uid", story_id).execute()
+        if not story_response.data or len(story_response.data) == 0:
+            # Try by numeric id
+            try:
+                numeric_id = int(story_id)
+                story_response = main.supabase.table("stories").select("*").eq("id", numeric_id).execute()
+            except ValueError:
+                pass
         
         if not story_response.data or len(story_response.data) == 0:
-            raise HTTPException(status_code=404, detail=f"Story {id} not found")
+            raise HTTPException(status_code=404, detail=f"Story {story_id} not found")
+        
         row = story_response.data[0]
         update_payload = {"status": state}
+        
         if state == "completed":
             if body.story_content is not None:
                 update_payload["story_content"] = body.story_content
@@ -451,10 +471,12 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
                 update_payload["dedication_image"] = body.dedication_image
             if body.story_cover is not None:
                 update_payload["story_cover"] = body.story_cover
+        
         update_response = main.supabase.table("stories").update(update_payload).eq("id", row["id"]).select("*").execute()
         if not update_response.data or len(update_response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update story state")
-        main.logger.info(f"Story {id} state updated to {state}")
+        
+        main.logger.info(f"Story {story_id} state updated to {state}")
         return update_response.data[0]
     except HTTPException as e:
         raise e
