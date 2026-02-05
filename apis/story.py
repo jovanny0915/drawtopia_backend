@@ -1,7 +1,7 @@
 """
 Story API routes
 """
-from fastapi import APIRouter, HTTPException, Request, Header
+from fastapi import APIRouter, HTTPException, Request, Header, Body
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from datetime import datetime
@@ -409,18 +409,27 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
     When state is "completed", optional story_content, scene_images, audio_urls, etc. are persisted.
     """
     import main  # Import here to avoid circular import
-    main.logger.info(f"[update_story_state] request={request.method} {request.url} id={id} body={body.model_dump()}")
     try:
+        main.logger.info(f"[update_story_state] Received request - method={request.method} url={request.url} id={id}")
+        main.logger.info(f"[update_story_state] Body data: {body.model_dump()}")
+        
         if not main.supabase:
             raise HTTPException(
                 status_code=500,
                 detail="Database service not available"
             )
-        state = (body.state or "generating").strip().lower()
-        if state not in ("generating", "completed"):
+        # Get state value with proper defaulting and normalization
+        state_value = body.state if body.state is not None else "generating"
+        state = state_value.strip().lower() if isinstance(state_value, str) else "generating"
+        
+        main.logger.info(f"[update_story_state] Normalized state: '{state}' (type: {type(state).__name__})")
+        
+        valid_states = ("generating", "completed")
+        if state not in valid_states:
+            main.logger.error(f"[update_story_state] Invalid state value: '{state}' not in {valid_states}")
             raise HTTPException(
                 status_code=400,
-                detail="state must be 'generating' or 'completed' (got: {!r})".format(body.state)
+                detail=f"state must be 'generating' or 'completed' (got: '{state}')"
             )
         # Resolve story by uid or numeric id
         story_response = main.supabase.table("stories").select("*").eq("uid", id).execute()
