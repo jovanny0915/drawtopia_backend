@@ -381,10 +381,15 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
             "gift_id": body.gift_id,
             "purchased": body.purchased or False,
         }
-        response = main.supabase.table("stories").insert(insert_data).select("*").execute()
+        response = main.supabase.table("stories").insert(insert_data).execute()
         if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to create story draft")
-        story = response.data[0]
+            # Some Supabase clients don't return inserted row; fetch by uid
+            story_response = main.supabase.table("stories").select("*").eq("uid", story_uid).execute()
+            if not story_response.data or len(story_response.data) == 0:
+                raise HTTPException(status_code=500, detail="Failed to create story draft")
+            story = story_response.data[0]
+        else:
+            story = response.data[0]
         main.logger.info(f"Story draft saved: uid={story.get('uid')}, id={story.get('id')}")
         return story
     except HTTPException as e:
