@@ -1166,15 +1166,9 @@ class BatchProcessor:
                 logger.info(f"Job {job_id} has no book_id, skipping story update")
                 return False
             
-            # Update story with PDF URL
-            update_response = self.supabase.table("stories").update({"pdf_url": pdf_url}).eq("id", book_id).execute()
-            
-            if update_response.data:
-                logger.info(f"✅ Updated story {book_id} with PDF URL")
-                return True
-            else:
-                logger.warning(f"Failed to update story {book_id} with PDF URL")
-                return False
+            # Note: Story table update disabled - no longer updating pdf_url
+            logger.info(f"✅ PDF uploaded successfully (story table update disabled): {pdf_url}")
+            return True
                 
         except Exception as e:
             logger.error(f"Error updating story with PDF URL: {e}")

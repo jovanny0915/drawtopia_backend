@@ -2483,20 +2483,11 @@ async def handle_checkout_completed(session):
             # Mark story as purchased if story_id is provided and payment is successful
             if story_id and payment_status == "paid" and supabase:
                 try:
-                    # Update the story's purchased field to true
-                    logger.info(f"Updating story {story_id} as purchased")
-                    
-                    update_result = supabase.table("stories").update({
-                        "purchased": True
-                    }).eq("uid", story_id).execute()
-                    
-                    if update_result.data and len(update_result.data) > 0:
-                        logger.info(f"Successfully marked story {story_id} as purchased")
-                    else:
-                        logger.warning(f"No story found with id {story_id} to mark as purchased")
+                    # Log the purchase (no longer updating stories table)
+                    logger.info(f"Story {story_id} was purchased (not updating stories table)")
                         
                 except Exception as e:
-                    logger.error(f"Error marking story {story_id} as purchased: {e}")
+                    logger.error(f"Error logging story {story_id} purchase: {e}")
             
             return
         

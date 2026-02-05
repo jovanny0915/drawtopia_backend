@@ -15,7 +15,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, UpdateStoryStateRequest
+from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest
 
 if TYPE_CHECKING:
     import main
@@ -399,92 +399,6 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
         import traceback
         main.logger.debug(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error saving story draft: {str(e)}")
-
-
-@router.post("/api/books/update-state")
-@limiter.limit("60/minute")
-async def update_story_state(request: Request, body: UpdateStoryStateRequest):
-    """
-    Update story state (status): "generating" (before generation) or "completed" (after success).
-    When state is "completed", optional story_content, scene_images, audio_urls, etc. are persisted.
-    The story ID is provided in the request body.
-    """
-    import main  # Import here to avoid circular import
-    try:
-        main.logger.info(f"[update_story_state] Received request - method={request.method} url={request.url}")
-        main.logger.info(f"[update_story_state] Body data: {body.model_dump()}")
-        
-        if not main.supabase:
-            raise HTTPException(
-                status_code=500,
-                detail="Database service not available"
-            )
-        
-        # Get story ID from body
-        story_id = body.id
-        if not story_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Story ID is required in request body"
-            )
-        
-        # Get state value with proper defaulting and normalization
-        state_value = body.state if body.state is not None else "generating"
-        state = state_value.strip().lower() if isinstance(state_value, str) else "generating"
-        
-        main.logger.info(f"[update_story_state] Story ID: {story_id}, Normalized state: '{state}' (type: {type(state).__name__})")
-        
-        valid_states = ("generating", "completed")
-        if state not in valid_states:
-            main.logger.error(f"[update_story_state] Invalid state value: '{state}' not in {valid_states}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"state must be 'generating' or 'completed' (got: '{state}')"
-            )
-        
-        # Resolve story by uid or numeric id
-        story_response = main.supabase.table("stories").select("*").eq("uid", story_id).execute()
-        if not story_response.data or len(story_response.data) == 0:
-            # Try by numeric id
-            try:
-                numeric_id = int(story_id)
-                story_response = main.supabase.table("stories").select("*").eq("id", numeric_id).execute()
-            except ValueError:
-                pass
-        
-        if not story_response.data or len(story_response.data) == 0:
-            raise HTTPException(status_code=404, detail=f"Story {story_id} not found")
-        
-        row = story_response.data[0]
-        update_payload = {"status": state}
-        
-        if state == "completed":
-            if body.story_content is not None:
-                update_payload["story_content"] = body.story_content
-            if body.scene_images is not None:
-                update_payload["scene_images"] = body.scene_images
-            if body.audio_urls is not None:
-                update_payload["audio_url"] = body.audio_urls
-            if body.dedication_text is not None:
-                update_payload["dedication_text"] = body.dedication_text
-            if body.dedication_image is not None:
-                update_payload["dedication_image"] = body.dedication_image
-            if body.story_cover is not None:
-                update_payload["story_cover"] = body.story_cover
-        
-        update_response = main.supabase.table("stories").update(update_payload).eq("id", row["id"]).select("*").execute()
-        if not update_response.data or len(update_response.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to update story state")
-        
-        main.logger.info(f"Story {story_id} state updated to {state}")
-        return update_response.data[0]
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        main.logger.error(f"Error updating story state: {e}")
-        import traceback
-        main.logger.debug(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Error updating story state: {str(e)}")
 
 
 @router.post("/story/generate-text")
@@ -1078,12 +992,6 @@ async def generate_book_pdf(request: Request, book_id: str):
         else:
             raise HTTPException(status_code=500, detail="Failed to upload PDF to storage")
         
-        # Update story record with PDF URL
-        update_response = main.supabase.table("stories").update({"pdf_url": pdf_url}).eq("uid", book_id).execute()
-        
-        if not update_response.data:
-            main.logger.warning(f"Failed to update story {book_id} with PDF URL")
-        
         elapsed = time.time() - start_time
         main.logger.info(f"✅ PDF generated and uploaded successfully in {elapsed:.2f} seconds")
         
@@ -1220,19 +1128,11 @@ async def save_search_game_results(request: Request, body: SearchGameResultReque
                     if story_response.data and len(story_response.data) > 0:
                         current_hints = story_response.data[0].get("hints", 3)
                         if current_hints is not None:
-                            # Decrement hints by the number used, but don't go below 0
-                            new_hints = max(0, current_hints - body.hints_used)
-                            
-                            # Update stories table
-                            update_response = main.supabase.table("stories").update({
-                                "hints": new_hints
-                            }).eq("id", body.story_id).execute()
-                            
-                            main.logger.info(f"Updated hints count for story {body.story_id}: {current_hints} -> {new_hints} (used {body.hints_used})")
+                            main.logger.info(f"Story {body.story_id} has {current_hints} hints remaining (used {body.hints_used} in this game)")
                         else:
-                            main.logger.warning(f"Story {body.story_id} has NULL hints, skipping update")
+                            main.logger.warning(f"Story {body.story_id} has NULL hints")
                     else:
-                        main.logger.warning(f"Story {body.story_id} not found, skipping hints update")
+                        main.logger.warning(f"Story {body.story_id} not found")
                 except Exception as e:
                     # Don't fail the entire operation if hints update fails
                     main.logger.error(f"Error updating hints count for story {body.story_id}: {e}")

@@ -112,10 +112,8 @@ async def delete_character(request: Request, character_id: str, user_id: Optiona
             )
         
         # Update all stories that reference this character - set character_id to null
-        stories_update_response = main.supabase.table("stories").update({"character_id": None}).eq("character_id", character_id).execute()
-        
-        updated_stories_count = len(stories_update_response.data) if stories_update_response.data else 0
-        main.logger.info(f"Updated {updated_stories_count} stories by removing character reference")
+        # Note: This operation is now disabled (not updating stories table)
+        main.logger.info(f"Character {character_id} deletion - stories table update disabled")
         
         # Delete the character
         delete_response = main.supabase.table("characters").delete().eq("id", character_id).execute()

@@ -104,19 +104,6 @@ class SaveStoryDraftRequest(BaseModel):
     purchased: Optional[bool] = False
 
 
-class UpdateStoryStateRequest(BaseModel):
-    """Request model for updating story state (generating / completed)"""
-    id: str  # Story ID (uid or numeric id)
-    state: Optional[str] = "generating"  # "generating" or "completed"; default when omitted
-    story_content: Optional[str] = None  # JSON string when state=completed
-    scene_images: Optional[List[str]] = None
-    audio_urls: Optional[List[Optional[str]]] = None
-    dedication_text: Optional[str] = None
-    dedication_image: Optional[str] = None
-    story_cover: Optional[str] = None
-    id: Optional[str] = None  # Story ID to update
-
-
 class SearchGameResultRequest(BaseModel):
     """Request model for saving search game results"""
     character_id: int
