@@ -409,7 +409,7 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
     When state is "completed", optional story_content, scene_images, audio_urls, etc. are persisted.
     """
     import main  # Import here to avoid circular import
-    print(f"Update story state request: {request.body} {body}")
+    main.logger.info(f"[update_story_state] request={request.method} {request.url} id={id} body={body.model_dump()}")
     try:
         if not main.supabase:
             raise HTTPException(
