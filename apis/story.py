@@ -432,13 +432,8 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
                 detail=f"state must be 'generating' or 'completed' (got: '{state}')"
             )
         # Resolve story by uid or numeric id
-        story_response = main.supabase.table("stories").select("*").eq("uid", id).execute()
-        if not story_response.data or len(story_response.data) == 0:
-            try:
-                numeric_id = int(id)
-                story_response = main.supabase.table("stories").select("*").eq("id", numeric_id).execute()
-            except ValueError:
-                pass
+        story_response = main.supabase.table("stories").select("*").eq("uid", str(id)).execute()
+        
         if not story_response.data or len(story_response.data) == 0:
             raise HTTPException(status_code=404, detail=f"Story {id} not found")
         row = story_response.data[0]
