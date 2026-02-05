@@ -15,7 +15,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest
+from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, UpdateStoryStateRequest
 
 if TYPE_CHECKING:
     import main
@@ -337,6 +337,120 @@ async def delete_book(request: Request, id: str):
         raise HTTPException(status_code=500, detail=f"Error deleting book: {str(e)}")
 
 
+@router.post("/api/story/save-draft")
+@limiter.limit("30/minute")
+async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
+    """
+    Save current story data as draft to Supabase (story-preview page).
+    Called when user clicks "Save as Draft" or "Generate and Preview Story" before any other action.
+    Story state (status) is set to "draft".
+    Returns the created story with uid and id for use on the loading page.
+    """
+    import main  # Import here to avoid circular import
+    try:
+        if not main.supabase:
+            raise HTTPException(
+                status_code=500,
+                detail="Database service not available"
+            )
+        story_uid = str(uuid.uuid4())
+        insert_data = {
+            "uid": story_uid,
+            "user_id": body.user_id,
+            "child_profile_id": body.child_profile_id,
+            "character_id": body.character_id,
+            "character_name": body.character_name,
+            "character_type": body.character_type,
+            "special_ability": body.special_ability or "",
+            "character_style": body.character_style,
+            "story_world": body.story_world,
+            "adventure_type": body.adventure_type,
+            "original_image_url": body.original_image_url,
+            "enhanced_images": body.enhanced_images or [],
+            "story_title": body.story_title,
+            "story_cover": body.story_cover,
+            "cover_design": body.cover_design,
+            "story_content": None,
+            "scene_images": [],
+            "audio_url": [],
+            "dedication_text": None,
+            "dedication_image": None,
+            "status": "draft",
+            "story_type": body.story_type or "story",
+            "hints": None,
+            "gift_id": body.gift_id,
+            "purchased": body.purchased or False,
+        }
+        response = main.supabase.table("stories").insert(insert_data).select("*").execute()
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to create story draft")
+        story = response.data[0]
+        main.logger.info(f"Story draft saved: uid={story.get('uid')}, id={story.get('id')}")
+        return story
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Error saving story draft: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error saving story draft: {str(e)}")
+
+
+@router.patch("/api/books/{id}/state")
+@limiter.limit("60/minute")
+async def update_story_state(request: Request, id: str, body: UpdateStoryStateRequest):
+    """
+    Update story state (status): "generating" (before generation) or "completed" (after success).
+    When state is "completed", optional story_content, scene_images, audio_urls, etc. are persisted.
+    """
+    import main  # Import here to avoid circular import
+    try:
+        if not main.supabase:
+            raise HTTPException(
+                status_code=500,
+                detail="Database service not available"
+            )
+        if body.state not in ("generating", "completed"):
+            raise HTTPException(status_code=400, detail="state must be 'generating' or 'completed'")
+        # Resolve story by uid or numeric id
+        story_response = main.supabase.table("stories").select("*").eq("uid", id).execute()
+        if not story_response.data or len(story_response.data) == 0:
+            try:
+                numeric_id = int(id)
+                story_response = main.supabase.table("stories").select("*").eq("id", numeric_id).execute()
+            except ValueError:
+                pass
+        if not story_response.data or len(story_response.data) == 0:
+            raise HTTPException(status_code=404, detail=f"Story {id} not found")
+        row = story_response.data[0]
+        update_payload = {"status": body.state}
+        if body.state == "completed":
+            if body.story_content is not None:
+                update_payload["story_content"] = body.story_content
+            if body.scene_images is not None:
+                update_payload["scene_images"] = body.scene_images
+            if body.audio_urls is not None:
+                update_payload["audio_url"] = body.audio_urls
+            if body.dedication_text is not None:
+                update_payload["dedication_text"] = body.dedication_text
+            if body.dedication_image is not None:
+                update_payload["dedication_image"] = body.dedication_image
+            if body.story_cover is not None:
+                update_payload["story_cover"] = body.story_cover
+        update_response = main.supabase.table("stories").update(update_payload).eq("id", row["id"]).select("*").execute()
+        if not update_response.data or len(update_response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update story state")
+        main.logger.info(f"Story {id} state updated to {body.state}")
+        return update_response.data[0]
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Error updating story state: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error updating story state: {str(e)}")
+
+
 @router.post("/story/generate-text")
 @limiter.limit("10/minute")
 async def generate_story_text_endpoint(request: Request, body: StoryRequest):
@@ -393,7 +507,7 @@ async def generate_story_text_endpoint(request: Request, body: StoryRequest):
 
 
 @router.post("/story/generate-titles")
-@limiter.limit("20/minute")
+@limiter.limit("5/minute")
 async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequest):
     """Generate 3 story title suggestions using OpenAI based on character and story information"""
     import main  # Import here to avoid circular import

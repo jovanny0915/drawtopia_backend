@@ -83,6 +83,38 @@ class StoryTitlesRequest(BaseModel):
     age_group: Optional[str] = "7-10"
 
 
+class SaveStoryDraftRequest(BaseModel):
+    """Request model for saving a story as draft (story-preview page)"""
+    user_id: Optional[str] = None
+    child_profile_id: str
+    character_id: Optional[int] = None
+    character_name: str
+    character_type: str  # person, animal, magical_creature
+    special_ability: Optional[str] = None
+    character_style: str  # 3d, cartoon, anime
+    story_world: str  # forest, space, underwater
+    adventure_type: str  # treasure_hunt, helping_friend
+    original_image_url: str
+    enhanced_images: Optional[List[str]] = None
+    story_title: Optional[str] = None
+    story_cover: Optional[str] = None
+    cover_design: Optional[str] = None
+    story_type: Optional[str] = "story"  # story or search
+    gift_id: Optional[str] = None
+    purchased: Optional[bool] = False
+
+
+class UpdateStoryStateRequest(BaseModel):
+    """Request model for updating story state (generating / completed)"""
+    state: str  # "generating" or "completed"
+    story_content: Optional[str] = None  # JSON string when state=completed
+    scene_images: Optional[List[str]] = None
+    audio_urls: Optional[List[Optional[str]]] = None
+    dedication_text: Optional[str] = None
+    dedication_image: Optional[str] = None
+    story_cover: Optional[str] = None
+
+
 class SearchGameResultRequest(BaseModel):
     """Request model for saving search game results"""
     character_id: int
