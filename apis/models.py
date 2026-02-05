@@ -106,7 +106,7 @@ class SaveStoryDraftRequest(BaseModel):
 
 class UpdateStoryStateRequest(BaseModel):
     """Request model for updating story state (generating / completed)"""
-    state: str  # "generating" or "completed"
+    state: Optional[str] = "generating"  # "generating" or "completed"; default when omitted
     story_content: Optional[str] = None  # JSON string when state=completed
     scene_images: Optional[List[str]] = None
     audio_urls: Optional[List[Optional[str]]] = None

@@ -415,8 +415,12 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
                 status_code=500,
                 detail="Database service not available"
             )
-        if body.state not in ("generating", "completed"):
-            raise HTTPException(status_code=400, detail="state must be 'generating' or 'completed'")
+        state = (body.state or "generating").strip().lower()
+        if state not in ("generating", "completed"):
+            raise HTTPException(
+                status_code=400,
+                detail="state must be 'generating' or 'completed' (got: {!r})".format(body.state)
+            )
         # Resolve story by uid or numeric id
         story_response = main.supabase.table("stories").select("*").eq("uid", id).execute()
         if not story_response.data or len(story_response.data) == 0:
@@ -428,8 +432,8 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
         if not story_response.data or len(story_response.data) == 0:
             raise HTTPException(status_code=404, detail=f"Story {id} not found")
         row = story_response.data[0]
-        update_payload = {"status": body.state}
-        if body.state == "completed":
+        update_payload = {"status": state}
+        if state == "completed":
             if body.story_content is not None:
                 update_payload["story_content"] = body.story_content
             if body.scene_images is not None:
@@ -445,7 +449,7 @@ async def update_story_state(request: Request, id: str, body: UpdateStoryStateRe
         update_response = main.supabase.table("stories").update(update_payload).eq("id", row["id"]).select("*").execute()
         if not update_response.data or len(update_response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update story state")
-        main.logger.info(f"Story {id} state updated to {body.state}")
+        main.logger.info(f"Story {id} state updated to {state}")
         return update_response.data[0]
     except HTTPException as e:
         raise e
