@@ -9,12 +9,13 @@ from typing import Optional, TYPE_CHECKING
 import uuid
 import requests
 import time
+import json
 from pydantic import HttpUrl, BaseModel
 from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest
+from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest
 
 if TYPE_CHECKING:
     import main
@@ -389,6 +390,113 @@ async def generate_story_text_endpoint(request: Request, body: StoryRequest):
     except Exception as e:
         main.logger.error(f"Unexpected error in generate_story_text_endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post("/story/generate-titles")
+@limiter.limit("20/minute")
+async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequest):
+    """Generate 3 story title suggestions using OpenAI based on character and story information"""
+    import main  # Import here to avoid circular import
+    try:
+        if not main.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+            )
+
+        main.logger.info(f"Generating story titles for character: {body.character_name}")
+
+        # Map story world to display format
+        world_display = {
+            "forest": "Enchanted Forest",
+            "outerspace": "Outer Space",
+            "underwater": "Underwater Kingdom"
+        }.get(body.story_world.lower(), body.story_world)
+
+        # Map adventure type to display format
+        adventure_display = {
+            "treasure": "Treasure Hunt",
+            "treasure_hunt": "Treasure Hunt",
+            "helping": "Helping a Friend",
+            "helpfriend": "Helping a Friend",
+            "helping_friend": "Helping a Friend"
+        }.get(body.adventure_type.lower(), body.adventure_type)
+
+        from openai import OpenAI
+        client = OpenAI(api_key=main.OPENAI_API_KEY)
+
+        prompt = f"""Generate exactly 3 creative, engaging story title suggestions for a personalized children's storybook.
+
+CHARACTER INFORMATION:
+- Name: {body.character_name}
+- Type: {body.character_type}
+- Special Ability: {body.special_ability}
+- Art Style: {body.character_style}
+
+STORY SETTING:
+- World: {world_display}
+- Adventure Type: {adventure_display}
+- Story Format: {body.story_format}
+- Target Age Group: {body.age_group}
+
+REQUIREMENTS:
+1. Each title must include the character's name ({body.character_name})
+2. Titles should reflect the story world ({world_display}) and adventure type ({adventure_display})
+3. Titles should be engaging, magical, and age-appropriate for children
+4. Each title should be unique and have a different style (e.g., one adventurous, one whimsical, one epic)
+5. Keep titles concise (under 50 characters each)
+
+Return ONLY a JSON array of exactly 3 title strings, nothing else. Example format:
+["Title 1", "Title 2", "Title 3"]"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a creative writer for children's books. Return only valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
+            max_tokens=300
+        )
+
+        content = response.choices[0].message.content.strip()
+        # Parse JSON - handle potential markdown code blocks
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        titles = json.loads(content)
+
+        if not isinstance(titles, list):
+            raise ValueError("Expected a list of titles from OpenAI")
+
+        titles = [str(t).strip() for t in titles[:5] if str(t).strip()][:3]
+        fallbacks = [
+            f"The Great Adventure of {body.character_name}",
+            f"The Amazing Journey of {body.character_name}",
+            f"{body.character_name} and the {world_display} Quest"
+        ]
+        while len(titles) < 3:
+            titles.append(fallbacks[len(titles)])
+
+        main.logger.info(f"Generated story titles: {titles}")
+
+        return {
+            "success": True,
+            "titles": titles
+        }
+
+    except json.JSONDecodeError as e:
+        main.logger.error(f"Failed to parse OpenAI response as JSON: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse generated titles")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Error in generate_story_titles_endpoint: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/story/generate-scenes")

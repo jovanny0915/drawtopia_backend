@@ -809,7 +809,7 @@ async def character_vision_extract(
     if not vision_client:
         raise HTTPException(
             status_code=503,
-            detail="Vision API not configured. Set GOOGLE_APPLICATION_CREDENTIALS.",
+            detail="Vision API not configured. Set GOOGLE_VISION_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON_B64.",
         )
     if not supabase:
         raise HTTPException(status_code=503, detail="Database not available.")

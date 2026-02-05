@@ -71,6 +71,18 @@ class StoryAudioRequest(BaseModel):
     age_group: str  # Must be "3-6", "7-10", or "11-12"
 
 
+class StoryTitlesRequest(BaseModel):
+    """Request model for generating story titles"""
+    character_name: str
+    special_ability: str
+    story_world: str  # forest, outerspace, underwater
+    adventure_type: str  # treasure, helping
+    character_type: Optional[str] = "person"  # person, animal, magical
+    character_style: Optional[str] = "cartoon"  # 3d, cartoon, anime
+    story_format: Optional[str] = "story"  # story, interactive
+    age_group: Optional[str] = "7-10"
+
+
 class SearchGameResultRequest(BaseModel):
     """Request model for saving search game results"""
     character_id: int

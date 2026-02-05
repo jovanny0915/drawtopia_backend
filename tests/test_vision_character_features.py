@@ -80,8 +80,8 @@ def test_vision_service_raises_when_client_none():
 
 
 @pytest.mark.skipif(
-    not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-    reason="GOOGLE_APPLICATION_CREDENTIALS not set; Vision API integration test skipped",
+    not (os.getenv("GOOGLE_VISION_API_KEY") or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")),
+    reason="No Vision credentials (GOOGLE_VISION_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON_B64, or GOOGLE_APPLICATION_CREDENTIALS); integration test skipped",
 )
 def test_vision_extract_returns_expected_structure():
     """

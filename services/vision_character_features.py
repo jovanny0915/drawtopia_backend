@@ -1,6 +1,8 @@
 """
 Google Vision API service layer for character feature extraction.
-Uses Google Cloud credentials from GOOGLE_SERVICE_ACCOUNT_JSON_B64 (base64-encoded service account JSON).
+Supports two authentication methods (checked in order):
+  1. GOOGLE_VISION_API_KEY - API key for REST-based authentication (simplest).
+  2. GOOGLE_SERVICE_ACCOUNT_JSON_B64 - base64-encoded service account JSON (OAuth2).
 Extracts labels and dominant colors from uploaded drawing images;
 implements retry on timeout (max 2 retries) and structured response-time logging.
 """
@@ -12,10 +14,24 @@ import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 # Max 2 retries on timeout => 3 attempts total
 VISION_EXTRACT_MAX_RETRIES = 2
+
+# REST API endpoint and timeout
+VISION_REST_URL = "https://vision.googleapis.com/v1/images:annotate"
+VISION_REST_TIMEOUT = 30
+
+
+class VisionAPIKeyClient:
+    """Lightweight client that uses Vision REST API with an API key."""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key.strip()
+        self._api_key = True  # Sentinel for routing in extract_character_features
 
 
 class VisionNotConfiguredError(Exception):
@@ -28,6 +44,12 @@ class VisionAPIError(Exception):
     """Raised when Vision API call fails after retries (e.g. timeout, API error)."""
 
     pass
+
+
+def _get_api_key_from_env() -> Optional[str]:
+    """Return GOOGLE_VISION_API_KEY if set and non-empty."""
+    key = os.getenv("GOOGLE_VISION_API_KEY")
+    return key.strip() if key else None
 
 
 def _credentials_from_env():
@@ -51,22 +73,29 @@ def _credentials_from_env():
 
 def get_vision_client():
     """
-    Create and return a Google Vision ImageAnnotatorClient.
-    Credentials: GOOGLE_SERVICE_ACCOUNT_JSON_B64 (base64-encoded service account JSON).
+    Create and return a Vision client for feature extraction.
+    Authentication (checked in order):
+      1. GOOGLE_VISION_API_KEY - returns VisionAPIKeyClient (REST API).
+      2. GOOGLE_SERVICE_ACCOUNT_JSON_B64 - returns ImageAnnotatorClient (gRPC).
     Returns None if no credentials are set or client init fails.
     """
+    api_key = _get_api_key_from_env()
+    if api_key:
+        logger.info("Google Vision API client initialized with API key (REST)")
+        return VisionAPIKeyClient(api_key=api_key)
+
     try:
         from google.cloud import vision
 
         credentials = _credentials_from_env()
         if credentials is None:
             logger.info(
-                "No Google credentials set (GOOGLE_SERVICE_ACCOUNT_JSON_B64); Vision API disabled."
+                "No Google credentials set (GOOGLE_VISION_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON_B64); Vision API disabled."
             )
             return None
 
         client = vision.ImageAnnotatorClient(credentials=credentials)
-        logger.info("Google Vision API client initialized from env credentials")
+        logger.info("Google Vision API client initialized from service account (env)")
         return client
     except Exception as e:
         logger.warning("Google Vision API client not available: %s", e)
@@ -86,6 +115,81 @@ def _is_timeout_error(e: Exception) -> bool:
     except ImportError:
         pass
     return False
+
+
+def _extract_via_rest_api(
+    image_bytes: bytes,
+    api_key: str,
+) -> Tuple[Dict[str, Any], int]:
+    """
+    Call Vision REST API with API key. Returns (features_dict, response_time_ms).
+    Raises VisionAPIError on failure.
+    """
+    b64_content = base64.b64encode(image_bytes).decode("ascii")
+    payload = {
+        "requests": [
+            {
+                "image": {"content": b64_content},
+                "features": [
+                    {"type": "LABEL_DETECTION", "maxResults": 50},
+                    {"type": "IMAGE_PROPERTIES"},
+                ],
+            }
+        ]
+    }
+    url = f"{VISION_REST_URL}?key={api_key}"
+    start = time.perf_counter()
+    resp = requests.post(url, json=payload, timeout=VISION_REST_TIMEOUT)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+    features: Dict[str, Any] = {
+        "labels": [],
+        "dominant_colors": [],
+        "safe_search": {},
+        "extraction_model": "google_vision",
+        "response_time_ms": elapsed_ms,
+    }
+
+    if resp.status_code != 200:
+        raise VisionAPIError(
+            f"Vision REST API HTTP {resp.status_code}: {resp.text[:500]}"
+        )
+
+    data = resp.json()
+    responses = data.get("responses") or []
+    if not responses:
+        return features, elapsed_ms
+
+    r = responses[0]
+
+    # Check for API-level error
+    if "error" in r:
+        err = r["error"]
+        msg = err.get("message", str(err))
+        raise VisionAPIError(f"Vision API error: {msg}")
+
+    # Parse label annotations
+    for ann in r.get("labelAnnotations") or []:
+        features["labels"].append({
+            "description": ann.get("description", ""),
+            "score": round(float(ann.get("score", 0)), 4),
+        })
+    features["labels"] = features["labels"][:50]
+
+    # Parse dominant colors from imagePropertiesAnnotation
+    props = r.get("imagePropertiesAnnotation") or {}
+    dom = props.get("dominantColors") or {}
+    colors_list = dom.get("colors") or []
+    for c in colors_list[:10]:
+        color_obj = c.get("color") or {}
+        features["dominant_colors"].append({
+            "red": color_obj.get("red", 0),
+            "green": color_obj.get("green", 0),
+            "blue": color_obj.get("blue", 0),
+            "pixel_fraction": round(float(c.get("pixelFraction", 0) or 0), 4),
+        })
+
+    return features, elapsed_ms
 
 
 def extract_character_features(
@@ -114,7 +218,52 @@ def extract_character_features(
     from google.cloud import vision
 
     if vision_client is None:
-        raise VisionNotConfiguredError("Vision API not configured. Set GOOGLE_APPLICATION_CREDENTIALS.")
+        raise VisionNotConfiguredError(
+            "Vision API not configured. Set GOOGLE_VISION_API_KEY or GOOGLE_SERVICE_ACCOUNT_JSON_B64."
+        )
+
+    # Use REST API when client is API-key based
+    if getattr(vision_client, "_api_key", False) and hasattr(vision_client, "api_key"):
+        last_error: Optional[Exception] = None
+        for attempt in range(VISION_EXTRACT_MAX_RETRIES + 1):
+            try:
+                features, response_time_ms = _extract_via_rest_api(
+                    image_bytes, vision_client.api_key
+                )
+                logger.info(
+                    "vision_api_response_time_ms=%d attempt=%d",
+                    response_time_ms,
+                    attempt + 1,
+                    extra={"vision_response_time_ms": response_time_ms, "attempt": attempt + 1},
+                )
+                if response_time_ms > 2000:
+                    logger.warning(
+                        "Vision API response exceeded 2s target: %d ms",
+                        response_time_ms,
+                        extra={"vision_response_time_ms": response_time_ms},
+                    )
+                return features, response_time_ms
+            except Exception as e:
+                last_error = e
+                if _is_timeout_error(e) and attempt < VISION_EXTRACT_MAX_RETRIES:
+                    logger.warning(
+                        "Vision API timeout (attempt %d), retrying...",
+                        attempt + 1,
+                        exc_info=False,
+                    )
+                    continue
+                logger.error(
+                    "Vision character feature extraction failed: %s",
+                    e,
+                    exc_info=True,
+                )
+                raise VisionAPIError(f"Vision API error: {e}") from e
+        raise VisionAPIError(
+            f"Vision extraction failed after {VISION_EXTRACT_MAX_RETRIES + 1} attempts: {last_error}"
+        )
+
+    # Use google.cloud.vision client (service account)
+    from google.cloud import vision
 
     features: Dict[str, Any] = {
         "labels": [],
@@ -123,7 +272,7 @@ def extract_character_features(
         "extraction_model": "google_vision",
     }
     response_time_ms = 0
-    last_error: Optional[Exception] = None
+    last_error = None
 
     for attempt in range(VISION_EXTRACT_MAX_RETRIES + 1):
         try:
