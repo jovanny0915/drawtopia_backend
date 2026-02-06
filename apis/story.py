@@ -418,12 +418,8 @@ async def set_story_generating(request: Request, body: SetStoryGeneratingRequest
         story_id = body.id
         if not story_id:
             raise HTTPException(status_code=400, detail="Story id is required")
-        story_response = main.supabase.table("stories").select("uid").eq("uid", story_id).execute()
         
-        if not story_response.data or len(story_response.data) == 0:
-            raise HTTPException(status_code=404, detail=f"Story {story_id} not found")
-        row_id = story_response.data[0]["id"]
-        main.supabase.table("stories").update({"status": "generating"}).eq("uid", row_id).execute()
+        main.supabase.table("stories").update({"status": "generating"}).eq("uid", story_id).execute()
         main.logger.info(f"Story {story_id} status set to generating")
         return {"success": True, "message": "Story status set to generating"}
     except HTTPException as e:
