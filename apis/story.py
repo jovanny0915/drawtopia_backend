@@ -15,7 +15,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest
+from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, SetStoryGeneratingRequest
 
 if TYPE_CHECKING:
     import main
@@ -399,6 +399,45 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
         import traceback
         main.logger.debug(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error saving story draft: {str(e)}")
+
+
+@router.post("/api/books/set-generating")
+@limiter.limit("60/minute")
+async def set_story_generating(request: Request, body: SetStoryGeneratingRequest):
+    """
+    Set story status to "generating" in Supabase before generation starts.
+    Called from the loading page before generating story text/images.
+    """
+    import main  # Import here to avoid circular import
+    try:
+        if not main.supabase:
+            raise HTTPException(
+                status_code=500,
+                detail="Database service not available"
+            )
+        story_id = body.id
+        if not story_id:
+            raise HTTPException(status_code=400, detail="Story id is required")
+        story_response = main.supabase.table("stories").select("id").eq("uid", story_id).execute()
+        if not story_response.data or len(story_response.data) == 0:
+            try:
+                numeric_id = int(story_id)
+                story_response = main.supabase.table("stories").select("id").eq("id", numeric_id).execute()
+            except ValueError:
+                pass
+        if not story_response.data or len(story_response.data) == 0:
+            raise HTTPException(status_code=404, detail=f"Story {story_id} not found")
+        row_id = story_response.data[0]["id"]
+        main.supabase.table("stories").update({"status": "generating"}).eq("id", row_id).execute()
+        main.logger.info(f"Story {story_id} status set to generating")
+        return {"success": True, "message": "Story status set to generating"}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        main.logger.error(f"Error setting story generating: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error setting story generating: {str(e)}")
 
 
 @router.post("/story/generate-text")

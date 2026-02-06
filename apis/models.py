@@ -104,6 +104,11 @@ class SaveStoryDraftRequest(BaseModel):
     purchased: Optional[bool] = False
 
 
+class SetStoryGeneratingRequest(BaseModel):
+    """Request model for setting story status to 'generating' (before generation starts)"""
+    id: str  # Story ID (uid or numeric id)
+
+
 class SearchGameResultRequest(BaseModel):
     """Request model for saving search game results"""
     character_id: int
