@@ -2407,6 +2407,45 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=500, detail=f"Webhook processing error: {str(e)}")
 
 
+def get_product_metadata_from_checkout_session(session):
+    """
+    Extract product metadata (credit/credits) from a Stripe checkout session (one-time payment).
+    Uses session line items -> price -> product metadata.
+    Returns dict with 'credit' (int) if found, None otherwise.
+    """
+    try:
+        session_id = session.get("id")
+        if not session_id:
+            return None
+        line_items = stripe.checkout.Session.list_line_items(session_id, expand=["data.price.product"])
+        data = line_items.get("data", [])
+        if not data:
+            logger.warning("No line items found in checkout session")
+            return None
+        price = data[0].get("price") or {}
+        product = price.get("product")
+        if not product:
+            return None
+        if isinstance(product, str):
+            product = stripe.Product.retrieve(product)
+        product_metadata = product.get("metadata", {})
+        credit = product_metadata.get("credit") or product_metadata.get("credits")
+        if credit is None:
+            return None
+        try:
+            credit = int(credit)
+        except (TypeError, ValueError):
+            logger.warning(f"Product metadata credit not a number: {credit}")
+            return None
+        if credit < 1:
+            return None
+        logger.info(f"Checkout session product metadata: credit={credit}")
+        return {"credit": credit}
+    except Exception as e:
+        logger.error(f"Error retrieving product metadata from checkout session: {e}")
+        return None
+
+
 def get_product_metadata_from_subscription(subscription):
     """
     Extract product metadata (credit and amount) from a Stripe subscription.
@@ -2479,6 +2518,46 @@ async def handle_checkout_completed(session):
                 # Gift will be created/updated by the frontend after payment verification
                 # The webhook just logs the successful payment
                 return
+            
+            # Single story or story bundle: update user credits from Stripe product metadata
+            if purchase_type in ("single_story", "story_bundle") and payment_status == "paid" and supabase:
+                product_metadata = get_product_metadata_from_checkout_session(session)
+                if product_metadata:
+                    credits_to_add = product_metadata.get("credit", 0) or 0
+                    if credits_to_add > 0:
+                        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+                        target_user_id = None
+                        if user_id and str(user_id).strip() and str(user_id) != "unknown":
+                            target_user_id = user_id
+                        elif customer_email:
+                            try:
+                                user_result = supabase.table("users").select("id").eq("email", customer_email).execute()
+                                if user_result.data and len(user_result.data) > 0:
+                                    target_user_id = user_result.data[0].get("id")
+                            except Exception as e:
+                                logger.warning(f"Could not find user by email {customer_email}: {e}")
+                        if target_user_id:
+                            try:
+                                credit_result = supabase.table("users").select("credit").eq("id", target_user_id).execute()
+                                if credit_result.data:
+                                    current_credit = credit_result.data[0].get("credit")
+                                    if current_credit is None:
+                                        current_credit = 0
+                                    try:
+                                        current_credit = int(current_credit) if isinstance(current_credit, str) else current_credit
+                                    except (TypeError, ValueError):
+                                        current_credit = 0
+                                    new_credit = current_credit + credits_to_add
+                                    supabase.table("users").update({"credit": new_credit}).eq("id", target_user_id).execute()
+                                    logger.info(f"Updated user {target_user_id} credits: +{credits_to_add} (was {current_credit}, now {new_credit}) from {purchase_type} purchase (Stripe product metadata)")
+                                else:
+                                    logger.warning(f"User {target_user_id} not found when updating credits")
+                            except Exception as e:
+                                logger.error(f"Error adding credits for {purchase_type} purchase: {e}")
+                        else:
+                            logger.warning(f"Cannot add credits: no user_id or customer_email for {purchase_type} purchase")
+                else:
+                    logger.warning(f"No product metadata (credit) for {purchase_type} purchase; set Stripe product metadata 'credit' or 'credits'")
             
             # Mark story as purchased if story_id is provided and payment is successful
             if story_id and payment_status == "paid" and supabase:
