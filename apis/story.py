@@ -1052,6 +1052,56 @@ async def generate_story_websocket(websocket: WebSocket):
             pass
 
 
+@router.post("/story/generate-story")
+@limiter.limit("10/minute")
+async def generate_story_combined_endpoint(request: Request, body: StoryRequest):
+    """
+    Combined story generation (text + 5 scenes + audio) in one request.
+    Same pipeline as WebSocket but returns full result when done.
+    Use this when WebSocket is not available or as fallback.
+    """
+    import main  # Import here to avoid circular import
+    try:
+        valid_age_groups = ["3-6", "7-10", "11-12"]
+        if body.age_group not in valid_age_groups:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid age_group: {body.age_group}. Must be one of: {', '.join(valid_age_groups)}"
+            )
+        main.logger.info(f"Generating full story for character: {body.character_name} (combined endpoint)")
+        # Run pipeline (same as WebSocket)
+        story_result = await asyncio.to_thread(_run_generate_story_text, body)
+        pages = story_result.get("pages") or []
+        if not pages:
+            raise HTTPException(status_code=500, detail="No story pages generated")
+        ref_url = str(body.character_image_url) if body.character_image_url else None
+        scene_urls = []
+        for i, page_text in enumerate(pages[:5], 1):
+            scene_url = await asyncio.to_thread(
+                _run_generate_single_scene, page_text, i, body, ref_url
+            )
+            scene_urls.append(scene_url)
+        while len(scene_urls) < 5:
+            scene_urls.append("")
+        dedication_image_url = await asyncio.to_thread(_run_generate_dedication_image, body)
+        audio_urls = await asyncio.to_thread(_run_generate_story_audio, pages, body.age_group)
+        result = {
+            "success": True,
+            "pages": pages,
+            "scene_urls": scene_urls,
+            "audio_urls": audio_urls,
+            "dedication_image_url": dedication_image_url,
+        }
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Generate-story combined endpoint error: {e}")
+        import traceback
+        main.logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/books/{book_id}/pdf")
 @limiter.limit("10/minute")
 async def download_book_pdf(
