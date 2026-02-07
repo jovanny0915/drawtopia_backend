@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, File, UploadFile, Query
+from fastapi import FastAPI, HTTPException, Request, Depends, File, UploadFile, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -130,6 +130,34 @@ vision_client = get_vision_client()
 queue_manager = None
 batch_processor = None
 worker_task = None
+
+
+class StoryProgressConnectionManager:
+    """Maps session_id to WebSocket for story generation progress updates (percentage only)."""
+    def __init__(self):
+        self._connections: Dict[str, WebSocket] = {}
+
+    def register(self, websocket: WebSocket) -> str:
+        import uuid
+        session_id = str(uuid.uuid4())
+        self._connections[session_id] = websocket
+        return session_id
+
+    def unregister(self, session_id: str) -> None:
+        self._connections.pop(session_id, None)
+
+    async def send_progress(self, session_id: str, percentage: int) -> bool:
+        ws = self._connections.get(session_id)
+        if not ws:
+            return False
+        try:
+            await ws.send_json({"percentage": min(100, max(0, percentage))})
+            return True
+        except Exception:
+            return False
+
+
+story_progress_manager = StoryProgressConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -263,6 +291,22 @@ app.include_router(children_router)
 app.include_router(character_router)
 app.include_router(story_router)
 app.include_router(monitoring_router)
+
+
+@app.websocket("/ws/story-progress")
+async def websocket_story_progress(websocket: WebSocket):
+    """WebSocket endpoint for story generation progress (percentage only). Client receives { percentage: 0-100 }."""
+    await websocket.accept()
+    session_id = story_progress_manager.register(websocket)
+    try:
+        await websocket.send_json({"session_id": session_id})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        story_progress_manager.unregister(session_id)
+
 
 # Request model to receive input data
 class ImageRequest(BaseModel):

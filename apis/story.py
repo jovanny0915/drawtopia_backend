@@ -15,7 +15,7 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from .models import StoryRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, SetStoryGeneratingRequest
+from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, SetStoryGeneratingRequest
 
 if TYPE_CHECKING:
     import main
@@ -724,6 +724,232 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
         raise e
     except Exception as e:
         main.logger.error(f"Unexpected error in generate_story_full_endpoint: {e}")
+        import traceback
+        main.logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+async def _send_progress(session_id: str, percentage: int) -> None:
+    """Send progress percentage to client via WebSocket."""
+    if main.story_progress_manager:
+        await main.story_progress_manager.send_progress(session_id, percentage)
+
+
+@router.post("/story/generate-with-progress")
+@limiter.limit("10/minute")
+async def generate_story_with_progress_endpoint(request: Request, body: StoryGenerateWithProgressRequest):
+    """Generate story text, audio, and scene images; send percentage progress via WebSocket (session_id from ws/story-progress)."""
+    import main  # Import here to avoid circular import
+    session_id = body.session_id
+    try:
+        valid_age_groups = ["3-6", "7-10", "11-12"]
+        if body.age_group not in valid_age_groups:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid age_group: {body.age_group}. Must be one of: {', '.join(valid_age_groups)}"
+            )
+
+        if not main.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+            )
+
+        await _send_progress(session_id, 2)
+        main.logger.info(f"Generating full story (with progress) for character: {body.character_name}")
+
+        # ——— Step 1: Generate story text ———
+        main.logger.info("Step 1/3: Generating story text...")
+        story_result = generate_story(
+            character_name=body.character_name,
+            character_type=body.character_type,
+            special_ability=body.special_ability,
+            age_group=body.age_group,
+            story_world=body.story_world,
+            adventure_type=body.adventure_type,
+            occasion_theme=body.occasion_theme,
+            use_api=True,
+            api_key=main.OPENAI_API_KEY,
+            story_text_prompt=body.story_text_prompt
+        )
+        pages_text = story_result.get("pages") or []
+        main.logger.info(f"Story text generated. Word count: {story_result.get('word_count', 0)}")
+        await _send_progress(session_id, 20)
+
+        if not pages_text:
+            raise HTTPException(status_code=500, detail="No story pages generated")
+
+        # ——— Step 2: Generate audio ———
+        main.logger.info("Step 2/3: Generating story audio...")
+        audio_urls = []
+        if main.supabase:
+            try:
+                audio_generator = AudioGenerator()
+                if audio_generator.available:
+                    audio_data_list = audio_generator.generate_audio_for_story(
+                        story_pages=pages_text,
+                        age_group=body.age_group,
+                        timeout_per_page=60
+                    )
+                    for i, audio_data in enumerate(audio_data_list, 1):
+                        if audio_data is None:
+                            audio_urls.append(None)
+                            continue
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        unique_id = str(uuid.uuid4())[:8]
+                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                        storage_bucket = "audio"
+                        audio_url = None
+                        try:
+                            try:
+                                main.supabase.storage.from_(storage_bucket).upload(
+                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                                )
+                            except Exception:
+                                storage_bucket = "images"
+                                main.supabase.storage.from_(storage_bucket).upload(
+                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                                )
+                            if storage_bucket:
+                                audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
+                        except Exception as e:
+                            main.logger.error(f"Error uploading audio for page {i}: {e}")
+                        audio_urls.append(audio_url)
+            except Exception as e:
+                main.logger.error(f"Error during audio generation: {e}")
+        await _send_progress(session_id, 40)
+
+        # ——— Step 3: Generate scene images ———
+        main.logger.info("Step 3/3: Generating story scenes...")
+        dedication_image_url = None
+        if main.GEMINI_API_KEY and main.gemini_client and body.dedication_text and body.dedication_scene_prompt:
+            try:
+                dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
+                dedication_base_image = main.create_blank_base_image(width=768, height=1024)
+                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
+                optimized_dedication_image = main.optimize_image_to_jpg(dedication_image_bytes)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                unique_id = str(uuid.uuid4())[:8]
+                dedication_filename = f"dedication_{timestamp}_{unique_id}.jpg"
+                dedication_storage_result = main.upload_to_supabase(optimized_dedication_image, dedication_filename)
+                if dedication_storage_result.get("uploaded") and dedication_storage_result.get("url"):
+                    dedication_image_url = dedication_storage_result["url"]
+            except Exception as e:
+                main.logger.error(f"Error generating dedication image: {e}")
+        await _send_progress(session_id, 45)
+
+        reference_image_url = str(body.character_image_url) if body.character_image_url else None
+        reference_image_data = None
+        if reference_image_url:
+            try:
+                reference_image_data = main.download_image_from_url(reference_image_url)
+            except Exception as e:
+                main.logger.warning(f"Failed to download reference image: {e}")
+
+        story_pages_out = []
+        consistency_results = []
+        flagged_pages = []
+        for i, page_text in enumerate(pages_text[:5], 1):
+            main.logger.info(f"Generating scene image for page {i}/5...")
+            scene_prompt = None
+            if body.scene_prompts and len(body.scene_prompts) >= i:
+                raw = body.scene_prompts[i - 1]
+                scene_prompt = raw.replace(
+                    f"[Story text for page {i} will be inserted here by the backend after story generation]",
+                    page_text
+                ).replace(
+                    f"[Page {i} text will be inserted here after story generation]",
+                    page_text
+                )
+
+            scene_url = main.generate_story_scene_image(
+                story_page_text=page_text,
+                page_number=i,
+                character_name=body.character_name,
+                character_type=body.character_type,
+                story_world=body.story_world,
+                reference_image_url=reference_image_url,
+                scene_prompt=scene_prompt
+            )
+            scene_http_url = None
+            scene_image_data = None
+            consistency_validation = None
+            if scene_url:
+                try:
+                    scene_http_url = HttpUrl(scene_url)
+                    try:
+                        scene_image_data = main.download_image_from_url(scene_url)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    main.logger.warning(f"Invalid scene URL for page {i}: {e}")
+            if reference_image_data and scene_image_data:
+                try:
+                    consistency_validation = main.validate_character_consistency(
+                        scene_image_data=scene_image_data,
+                        reference_image_data=reference_image_data,
+                        page_number=i,
+                        timeout_seconds=15,
+                        scene_image_url=scene_url,
+                        reference_image_url=reference_image_url,
+                    )
+                    consistency_results.append(consistency_validation)
+                    if consistency_validation.flagged:
+                        flagged_pages.append(i)
+                except Exception as e:
+                    main.logger.error(f"Error during consistency validation for page {i}: {e}")
+            story_pages_out.append(main.StoryPage(
+                text=page_text,
+                scene=scene_http_url,
+                consistency_validation=consistency_validation
+            ))
+            await _send_progress(session_id, 45 + (i * 11))
+
+        consistency_summary = None
+        if consistency_results:
+            avg_score = sum(r.similarity_score for r in consistency_results) / len(consistency_results)
+            min_score = min(r.similarity_score for r in consistency_results)
+            max_score = max(r.similarity_score for r in consistency_results)
+            total_validation_time = sum(r.validation_time_seconds for r in consistency_results)
+            consistent_count = sum(1 for r in consistency_results if r.is_consistent)
+            consistency_summary = {
+                "total_pages_validated": len(consistency_results),
+                "consistent_pages": consistent_count,
+                "inconsistent_pages": len(consistency_results) - consistent_count,
+                "flagged_pages": flagged_pages,
+                "average_similarity_score": round(avg_score, 3),
+                "min_similarity_score": round(min_score, 3),
+                "max_similarity_score": round(max_score, 3),
+                "total_validation_time_seconds": round(total_validation_time, 2),
+                "average_validation_time_seconds": round(total_validation_time / len(consistency_results), 2),
+                "all_consistent": len(flagged_pages) == 0
+            }
+
+        await _send_progress(session_id, 100)
+        return {
+            "success": True,
+            "pages": [
+                {
+                    "text": p.text,
+                    "scene": str(p.scene) if p.scene else None,
+                    "consistency_validation": p.consistency_validation.model_dump() if p.consistency_validation is not None else None
+                }
+                for p in story_pages_out
+            ],
+            "audio_urls": audio_urls,
+            "dedication_image_url": dedication_image_url,
+            "full_story": story_result.get("full_story"),
+            "word_count": story_result.get("word_count"),
+            "page_word_counts": story_result.get("page_word_counts"),
+            "consistency_summary": consistency_summary,
+        }
+
+    except HTTPException as e:
+        await _send_progress(session_id, 100)
+        raise e
+    except Exception as e:
+        main.logger.error(f"Unexpected error in generate_story_with_progress_endpoint: {e}")
+        await _send_progress(session_id, 100)
         import traceback
         main.logger.debug(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")

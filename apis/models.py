@@ -44,6 +44,11 @@ class StoryRequest(BaseModel):
         }
 
 
+class StoryGenerateWithProgressRequest(StoryRequest):
+    """Story generation request with session_id for WebSocket progress updates (percentage only)."""
+    session_id: str
+
+
 class SceneResult(BaseModel):
     """Individual scene result within search game results"""
     scene_index: int
