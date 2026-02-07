@@ -353,6 +353,38 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
                 status_code=500,
                 detail="Database service not available"
             )
+        # If client sent an existing story uid, check if it exists — then update instead of insert
+        existing_uid = (body.story_uid or "").strip() or None
+        if existing_uid:
+            check = main.supabase.table("stories").select("uid").eq("uid", existing_uid).execute()
+            if check.data and len(check.data) > 0:
+                update_data = {
+                    "user_id": body.user_id,
+                    "child_profile_id": body.child_profile_id,
+                    "character_id": body.character_id,
+                    "character_name": body.character_name,
+                    "character_type": body.character_type,
+                    "special_ability": body.special_ability or "",
+                    "character_style": body.character_style,
+                    "story_world": body.story_world,
+                    "adventure_type": body.adventure_type,
+                    "original_image_url": body.original_image_url,
+                    "enhanced_images": body.enhanced_images or [],
+                    "story_title": body.story_title,
+                    "story_cover": body.story_cover,
+                    "cover_design": body.cover_design,
+                    "status": "draft",
+                    "story_type": body.story_type or "story",
+                    "gift_id": body.gift_id,
+                    "purchased": body.purchased or False,
+                }
+                main.supabase.table("stories").update(update_data).eq("uid", existing_uid).execute()
+                story_response = main.supabase.table("stories").select("*").eq("uid", existing_uid).execute()
+                story = story_response.data[0] if story_response.data else None
+                if story:
+                    main.logger.info(f"Story draft updated (existing): uid={story.get('uid')}, id={story.get('id')}")
+                    return story
+        # New story or existing uid not found: insert
         story_uid = str(uuid.uuid4())
         insert_data = {
             "uid": story_uid,

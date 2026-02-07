@@ -85,6 +85,7 @@ class StoryTitlesRequest(BaseModel):
 
 class SaveStoryDraftRequest(BaseModel):
     """Request model for saving a story as draft (story-preview page)"""
+    story_uid: Optional[str] = None  # If set and exists in DB, update instead of insert
     user_id: Optional[str] = None
     child_profile_id: str
     character_id: Optional[int] = None
