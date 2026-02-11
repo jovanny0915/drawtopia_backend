@@ -320,6 +320,92 @@ async def upload_template_image(
         raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
 
 
+@router.post("/api/admin/templates/{template_id}/upload-story-page")
+@limiter.limit("30/minute")
+async def upload_single_story_page(
+    request: Request,
+    template_id: str,
+    file: UploadFile = File(...),
+    template_name: str = Form(...),
+    page_index: int = Form(...)  # Index position for this page (0-based)
+):
+    """
+    Upload a single story page image for a book template.
+    Images are automatically optimized to WebP format before upload.
+    This endpoint should be called multiple times (once per image) to avoid 413 errors.
+    
+    Args:
+        template_id: ID of the template
+        file: Single image file to upload (will be optimized to WebP)
+        template_name: Name of the template (for folder path)
+        page_index: Index position for this page in the story_page_images array (0-based)
+    
+    Returns:
+        JSON with success status, updated template data, and image URL
+    """
+    supabase = get_supabase_client()
+    
+    # Validate file is an image
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not an image")
+    
+    try:
+        # Get current template to retrieve existing story pages
+        template_response = supabase.table("book_templates").select("story_page_images").eq("id", template_id).single().execute()
+        
+        if not template_response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        existing_urls = template_response.data.get("story_page_images") or []
+        
+        # Upload new file (will be optimized to WebP automatically)
+        sanitized_name = sanitize_template_name(template_name)
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        file_path = f"book-templates/{sanitized_name}/story-page-{page_index + 1}.{file_ext}"
+        
+        # Upload to storage (with automatic optimization)
+        public_url = await upload_to_storage(file, "book-images", file_path)
+        
+        # Insert or update the URL at the specified index
+        if page_index < len(existing_urls):
+            # Update existing position
+            existing_urls[page_index] = public_url
+        else:
+            # Append to the end (fill gaps if needed)
+            while len(existing_urls) < page_index:
+                existing_urls.append(None)  # Placeholder for gaps
+            existing_urls.append(public_url)
+        
+        # Remove any None placeholders
+        existing_urls = [url for url in existing_urls if url is not None]
+        
+        # Update database with new array
+        response = supabase.table("book_templates").update({
+            "story_page_images": existing_urls
+        }).eq("id", template_id).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update template in database")
+        
+        logger.info(f"✅ Uploaded story page {page_index + 1} for template: {template_name}")
+        
+        return {
+            "success": True,
+            "data": response.data[0],
+            "image_url": public_url,
+            "page_index": page_index,
+            "total_pages": len(existing_urls),
+            "optimized": True,
+            "format": "WebP"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error uploading story page: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload story page: {str(e)}")
+
+
 @router.post("/api/admin/templates/{template_id}/upload-story-pages")
 @limiter.limit("20/minute")
 async def upload_story_pages(
@@ -330,8 +416,11 @@ async def upload_story_pages(
     existing_images: str = Form(default="[]")  # JSON string of existing image URLs
 ):
     """
-    Upload multiple story page images for a book template.
+    Upload multiple story page images for a book template (DEPRECATED - use upload-story-page instead).
     All images are automatically optimized to WebP format before upload to save storage space.
+    
+    NOTE: This endpoint may cause 413 errors with many/large files. 
+    Use POST /upload-story-page endpoint instead to upload one image at a time.
     
     Args:
         template_id: ID of the template
