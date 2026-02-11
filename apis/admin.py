@@ -4,6 +4,7 @@ Handles all admin operations including:
 - Template CRUD operations
 - Image uploads to Supabase storage
 - Storage bucket file management
+- Image optimization before upload
 """
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse
@@ -12,10 +13,14 @@ from typing import List, Optional, Dict, Any
 from rate_limiter import limiter
 import os
 import logging
+from image_optimizer import TemplateImageOptimizer
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Initialize image optimizer for template images
+image_optimizer = TemplateImageOptimizer()
 
 
 # ==================== Pydantic Models ====================
@@ -66,19 +71,52 @@ def sanitize_template_name(name: str) -> str:
 
 
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
-    """Upload file to Supabase storage and return public URL"""
+    """
+    Upload file to Supabase storage with optimization and return public URL.
+    Images are automatically optimized to WebP format before upload.
+    """
     supabase = get_supabase_client()
     
     try:
         # Read file content
         file_content = await file.read()
         
+        # Optimize image before upload
+        logger.info(f"🔧 Optimizing image before upload: {file.filename}")
+        try:
+            optimized_content, content_type, extension = image_optimizer.optimize_image(
+                file_content,
+                filename=file.filename
+            )
+            
+            # Update file path to use optimized extension
+            if not file_path.endswith(f".{extension}"):
+                # Replace original extension with optimized extension
+                base_path = file_path.rsplit(".", 1)[0] if "." in file_path else file_path
+                file_path = f"{base_path}.{extension}"
+            
+            logger.info(
+                f"✅ Image optimized: {len(file_content) / 1024:.1f}KB → "
+                f"{len(optimized_content) / 1024:.1f}KB "
+                f"({content_type})"
+            )
+            
+            # Use optimized content
+            upload_content = optimized_content
+            upload_content_type = content_type
+            
+        except Exception as opt_error:
+            logger.warning(f"⚠️ Image optimization failed, uploading original: {opt_error}")
+            # Fallback to original if optimization fails
+            upload_content = file_content
+            upload_content_type = file.content_type or "image/jpeg"
+        
         # Upload to storage with upsert (overwrites existing file)
         response = supabase.storage.from_(bucket_name).upload(
             path=file_path,
-            file=file_content,
+            file=upload_content,
             file_options={
-                "content-type": file.content_type or "image/jpeg",
+                "content-type": upload_content_type,
                 "upsert": "true"
             }
         )
@@ -87,7 +125,7 @@ async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) 
         public_url_response = supabase.storage.from_(bucket_name).get_public_url(file_path)
         public_url = public_url_response
         
-        logger.info(f"✅ Uploaded file to storage: {file_path}")
+        logger.info(f"✅ Uploaded optimized file to storage: {file_path}")
         return public_url
         
     except Exception as e:
@@ -220,13 +258,17 @@ async def upload_template_image(
 ):
     """
     Upload a single image for a book template field.
+    Images are automatically optimized to WebP format before upload to save storage space.
     
     Args:
         template_id: ID of the template
-        file: Image file to upload
+        file: Image file to upload (will be optimized to WebP)
         field_key: Database field name (cover_image, copyright_page_image, dedication_page_image, 
                    last_story_page_image, back_cover_image)
         template_name: Name of the template (for folder path)
+    
+    Returns:
+        JSON with success status, updated template data, and optimized image URL
     """
     supabase = get_supabase_client()
     
@@ -246,12 +288,12 @@ async def upload_template_image(
         raise HTTPException(status_code=400, detail="File must be an image")
     
     try:
-        # Build storage path
+        # Build storage path (extension will be updated by optimizer to .webp)
         sanitized_name = sanitize_template_name(template_name)
         file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
         file_path = f"book-templates/{sanitized_name}/{field_key}.{file_ext}"
         
-        # Upload to storage
+        # Upload to storage (will be optimized to WebP automatically)
         public_url = await upload_to_storage(file, "book-images", file_path)
         
         # Update database
@@ -266,7 +308,9 @@ async def upload_template_image(
         return {
             "success": True,
             "data": response.data[0],
-            "image_url": public_url
+            "image_url": public_url,
+            "optimized": True,
+            "format": "WebP"
         }
         
     except HTTPException:
@@ -287,12 +331,16 @@ async def upload_story_pages(
 ):
     """
     Upload multiple story page images for a book template.
+    All images are automatically optimized to WebP format before upload to save storage space.
     
     Args:
         template_id: ID of the template
-        files: List of image files to upload
+        files: List of image files to upload (will be optimized to WebP)
         template_name: Name of the template (for folder path)
         existing_images: JSON string array of existing image URLs to preserve
+    
+    Returns:
+        JSON with success status, updated template data, upload count, and optimization info
     """
     supabase = get_supabase_client()
     
@@ -308,7 +356,7 @@ async def upload_story_pages(
             if not file.content_type or not file.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not an image")
         
-        # Upload new files
+        # Upload new files (will be optimized to WebP automatically)
         sanitized_name = sanitize_template_name(template_name)
         new_urls = []
         
@@ -317,7 +365,7 @@ async def upload_story_pages(
             file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
             file_path = f"book-templates/{sanitized_name}/story-page-{current_index + 1}.{file_ext}"
             
-            # Upload to storage
+            # Upload to storage (with automatic optimization)
             public_url = await upload_to_storage(file, "book-images", file_path)
             new_urls.append(public_url)
         
@@ -338,7 +386,9 @@ async def upload_story_pages(
             "success": True,
             "data": response.data[0],
             "uploaded_count": len(new_urls),
-            "total_count": len(all_urls)
+            "total_count": len(all_urls),
+            "optimized": True,
+            "format": "WebP"
         }
         
     except HTTPException:
