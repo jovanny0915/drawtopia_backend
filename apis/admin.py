@@ -1,0 +1,401 @@
+"""
+Admin API routes for book template management
+Handles all admin operations including:
+- Template CRUD operations
+- Image uploads to Supabase storage
+- Storage bucket file management
+"""
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from rate_limiter import limiter
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# ==================== Pydantic Models ====================
+
+class BookTemplateCreate(BaseModel):
+    """Request model for creating a new book template"""
+    name: str
+
+
+class BookTemplateUpdate(BaseModel):
+    """Request model for updating book template metadata"""
+    name: Optional[str] = None
+    cover_image: Optional[str] = None
+    copyright_page_image: Optional[str] = None
+    dedication_page_image: Optional[str] = None
+    story_page_images: Optional[List[str]] = None
+    last_story_page_image: Optional[str] = None
+    back_cover_image: Optional[str] = None
+
+
+class BookTemplateResponse(BaseModel):
+    """Response model for book template"""
+    id: str
+    name: str
+    cover_image: Optional[str] = None
+    copyright_page_image: Optional[str] = None
+    dedication_page_image: Optional[str] = None
+    story_page_images: Optional[List[str]] = None
+    last_story_page_image: Optional[str] = None
+    back_cover_image: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+# ==================== Helper Functions ====================
+
+def get_supabase_client():
+    """Get Supabase client from main module"""
+    import main
+    if not main.supabase:
+        raise HTTPException(status_code=500, detail="Supabase client not initialized")
+    return main.supabase
+
+
+def sanitize_template_name(name: str) -> str:
+    """Sanitize template name for folder paths"""
+    import re
+    return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', name.lower().strip()))
+
+
+async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
+    """Upload file to Supabase storage and return public URL"""
+    supabase = get_supabase_client()
+    
+    try:
+        # Read file content
+        file_content = await file.read()
+        
+        # Upload to storage with upsert (overwrites existing file)
+        response = supabase.storage.from_(bucket_name).upload(
+            path=file_path,
+            file=file_content,
+            file_options={
+                "content-type": file.content_type or "image/jpeg",
+                "upsert": "true"
+            }
+        )
+        
+        # Get public URL
+        public_url_response = supabase.storage.from_(bucket_name).get_public_url(file_path)
+        public_url = public_url_response
+        
+        logger.info(f"✅ Uploaded file to storage: {file_path}")
+        return public_url
+        
+    except Exception as e:
+        logger.error(f"❌ Error uploading file to storage: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload file to storage: {str(e)}"
+        )
+
+
+async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None:
+    """Delete all files in a folder from Supabase storage"""
+    supabase = get_supabase_client()
+    
+    try:
+        # List all files in the folder
+        files_response = supabase.storage.from_(bucket_name).list(folder_path)
+        
+        if files_response and len(files_response) > 0:
+            # Build file paths to delete
+            file_paths = [f"{folder_path}/{file['name']}" for file in files_response]
+            
+            # Delete all files
+            delete_response = supabase.storage.from_(bucket_name).remove(file_paths)
+            
+            logger.info(f"✅ Deleted {len(file_paths)} files from storage folder: {folder_path}")
+        else:
+            logger.info(f"ℹ️ No files found in storage folder: {folder_path}")
+            
+    except Exception as e:
+        logger.error(f"⚠️ Error deleting folder from storage: {e}")
+        # Don't raise exception - continue with template deletion even if storage cleanup fails
+
+
+# ==================== API Endpoints ====================
+
+@router.get("/api/admin/templates")
+@limiter.limit("30/minute")
+async def get_templates(request: Request):
+    """Get all book templates"""
+    supabase = get_supabase_client()
+    
+    try:
+        response = supabase.table("book_templates").select("*").order("created_at", desc=True).execute()
+        
+        return {
+            "success": True,
+            "data": response.data
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error fetching templates: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
+
+
+@router.post("/api/admin/templates")
+@limiter.limit("10/minute")
+async def create_template(request: Request, body: BookTemplateCreate):
+    """Create a new book template"""
+    supabase = get_supabase_client()
+    
+    if not body.name or not body.name.strip():
+        raise HTTPException(status_code=400, detail="Template name is required")
+    
+    try:
+        response = supabase.table("book_templates").insert({
+            "name": body.name.strip()
+        }).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to create template")
+        
+        logger.info(f"✅ Created template: {body.name}")
+        
+        return {
+            "success": True,
+            "data": response.data[0]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating template: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
+
+
+@router.delete("/api/admin/templates/{template_id}")
+@limiter.limit("10/minute")
+async def delete_template(request: Request, template_id: str):
+    """Delete a book template and all associated images from storage"""
+    supabase = get_supabase_client()
+    
+    try:
+        # Get template to get its name for storage deletion
+        response = supabase.table("book_templates").select("name").eq("id", template_id).single().execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        template_name = response.data["name"]
+        sanitized_name = sanitize_template_name(template_name)
+        folder_path = f"book-templates/{sanitized_name}"
+        
+        # Delete files from storage bucket
+        await delete_folder_from_storage("book-images", folder_path)
+        
+        # Delete template from database
+        delete_response = supabase.table("book_templates").delete().eq("id", template_id).execute()
+        
+        logger.info(f"✅ Deleted template: {template_name} (ID: {template_id})")
+        
+        return {
+            "success": True,
+            "message": f"Template '{template_name}' deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting template: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete template: {str(e)}")
+
+
+@router.post("/api/admin/templates/{template_id}/upload-image")
+@limiter.limit("20/minute")
+async def upload_template_image(
+    request: Request,
+    template_id: str,
+    file: UploadFile = File(...),
+    field_key: str = Form(...),
+    template_name: str = Form(...)
+):
+    """
+    Upload a single image for a book template field.
+    
+    Args:
+        template_id: ID of the template
+        file: Image file to upload
+        field_key: Database field name (cover_image, copyright_page_image, dedication_page_image, 
+                   last_story_page_image, back_cover_image)
+        template_name: Name of the template (for folder path)
+    """
+    supabase = get_supabase_client()
+    
+    # Validate field_key
+    valid_fields = [
+        "cover_image", "copyright_page_image", "dedication_page_image",
+        "last_story_page_image", "back_cover_image"
+    ]
+    if field_key not in valid_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid field_key. Must be one of: {', '.join(valid_fields)}"
+        )
+    
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    try:
+        # Build storage path
+        sanitized_name = sanitize_template_name(template_name)
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        file_path = f"book-templates/{sanitized_name}/{field_key}.{file_ext}"
+        
+        # Upload to storage
+        public_url = await upload_to_storage(file, "book-images", file_path)
+        
+        # Update database
+        update_data = {field_key: public_url}
+        response = supabase.table("book_templates").update(update_data).eq("id", template_id).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update template in database")
+        
+        logger.info(f"✅ Uploaded {field_key} for template: {template_name}")
+        
+        return {
+            "success": True,
+            "data": response.data[0],
+            "image_url": public_url
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error uploading image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
+
+
+@router.post("/api/admin/templates/{template_id}/upload-story-pages")
+@limiter.limit("20/minute")
+async def upload_story_pages(
+    request: Request,
+    template_id: str,
+    files: List[UploadFile] = File(...),
+    template_name: str = Form(...),
+    existing_images: str = Form(default="[]")  # JSON string of existing image URLs
+):
+    """
+    Upload multiple story page images for a book template.
+    
+    Args:
+        template_id: ID of the template
+        files: List of image files to upload
+        template_name: Name of the template (for folder path)
+        existing_images: JSON string array of existing image URLs to preserve
+    """
+    supabase = get_supabase_client()
+    
+    try:
+        import json
+        existing_urls = json.loads(existing_images) if existing_images else []
+        
+        if not isinstance(existing_urls, list):
+            raise HTTPException(status_code=400, detail="existing_images must be a JSON array")
+        
+        # Validate all files are images
+        for file in files:
+            if not file.content_type or not file.content_type.startswith("image/"):
+                raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not an image")
+        
+        # Upload new files
+        sanitized_name = sanitize_template_name(template_name)
+        new_urls = []
+        
+        for idx, file in enumerate(files):
+            current_index = len(existing_urls) + idx
+            file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+            file_path = f"book-templates/{sanitized_name}/story-page-{current_index + 1}.{file_ext}"
+            
+            # Upload to storage
+            public_url = await upload_to_storage(file, "book-images", file_path)
+            new_urls.append(public_url)
+        
+        # Combine existing and new URLs
+        all_urls = existing_urls + new_urls
+        
+        # Update database
+        response = supabase.table("book_templates").update({
+            "story_page_images": all_urls
+        }).eq("id", template_id).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update template in database")
+        
+        logger.info(f"✅ Uploaded {len(new_urls)} story pages for template: {template_name}")
+        
+        return {
+            "success": True,
+            "data": response.data[0],
+            "uploaded_count": len(new_urls),
+            "total_count": len(all_urls)
+        }
+        
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid existing_images JSON format")
+    except Exception as e:
+        logger.error(f"❌ Error uploading story pages: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload story pages: {str(e)}")
+
+
+@router.patch("/api/admin/templates/{template_id}")
+@limiter.limit("20/minute")
+async def update_template(
+    request: Request,
+    template_id: str,
+    body: BookTemplateUpdate
+):
+    """Update book template metadata (name or image URLs)"""
+    supabase = get_supabase_client()
+    
+    try:
+        # Build update data from non-None fields
+        update_data = {}
+        if body.name is not None:
+            update_data["name"] = body.name.strip()
+        if body.cover_image is not None:
+            update_data["cover_image"] = body.cover_image
+        if body.copyright_page_image is not None:
+            update_data["copyright_page_image"] = body.copyright_page_image
+        if body.dedication_page_image is not None:
+            update_data["dedication_page_image"] = body.dedication_page_image
+        if body.story_page_images is not None:
+            update_data["story_page_images"] = body.story_page_images
+        if body.last_story_page_image is not None:
+            update_data["last_story_page_image"] = body.last_story_page_image
+        if body.back_cover_image is not None:
+            update_data["back_cover_image"] = body.back_cover_image
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        
+        # Update database
+        response = supabase.table("book_templates").update(update_data).eq("id", template_id).execute()
+        
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        logger.info(f"✅ Updated template (ID: {template_id})")
+        
+        return {
+            "success": True,
+            "data": response.data[0]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error updating template: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update template: {str(e)}")

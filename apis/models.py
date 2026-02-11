@@ -156,3 +156,34 @@ class SearchGameResultRequest(BaseModel):
                 "child_profile_id": 1
             }
         }
+
+
+# ==================== Admin Models ====================
+
+class BookTemplateCreate(BaseModel):
+    """Request model for creating a new book template"""
+    name: str
+
+
+class BookTemplateUpdate(BaseModel):
+    """Request model for updating book template metadata"""
+    name: Optional[str] = None
+    cover_image: Optional[str] = None
+    copyright_page_image: Optional[str] = None
+    dedication_page_image: Optional[str] = None
+    story_page_images: Optional[List[str]] = None
+    last_story_page_image: Optional[str] = None
+    back_cover_image: Optional[str] = None
+
+
+class BookTemplateResponse(BaseModel):
+    """Response model for book template"""
+    id: str
+    name: str
+    cover_image: Optional[str] = None
+    copyright_page_image: Optional[str] = None
+    dedication_page_image: Optional[str] = None
+    story_page_images: Optional[List[str]] = None
+    last_story_page_image: Optional[str] = None
+    back_cover_image: Optional[str] = None
+    created_at: Optional[str] = None

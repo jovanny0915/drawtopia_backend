@@ -263,6 +263,7 @@ from apis.children import router as children_router
 from apis.character import router as character_router
 from apis.story import router as story_router
 from apis.monitoring import router as monitoring_router
+from apis.admin import router as admin_router
 
 # Helper function to call email API endpoints internally
 async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,6 +292,7 @@ app.include_router(children_router)
 app.include_router(character_router)
 app.include_router(story_router)
 app.include_router(monitoring_router)
+app.include_router(admin_router)
 
 
 @app.websocket("/ws/story-progress")
