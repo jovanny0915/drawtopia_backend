@@ -165,7 +165,7 @@ async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None
 
 # ==================== API Endpoints ====================
 
-@router.get("/admin/templates")
+@router.get("/api/admin/templates")
 @limiter.limit("30/minute")
 async def get_templates(request: Request):
     """Get all book templates"""
@@ -184,7 +184,7 @@ async def get_templates(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
 
 
-@router.post("/admin/templates")
+@router.post("/api/admin/templates")
 @limiter.limit("10/minute")
 async def create_template(request: Request, body: BookTemplateCreate):
     """Create a new book template"""
@@ -223,7 +223,7 @@ async def create_template(request: Request, body: BookTemplateCreate):
         raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
 
 
-@router.delete("/admin/templates/{template_id}")
+@router.delete("/api/admin/templates/{template_id}")
 @limiter.limit("10/minute")
 async def delete_template(request: Request, template_id: str):
     """Delete a book template and all associated images from storage"""
@@ -260,7 +260,7 @@ async def delete_template(request: Request, template_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete template: {str(e)}")
 
 
-@router.post("/admin/templates/{template_id}/upload-image")
+@router.post("/api/admin/templates/{template_id}/upload-image")
 @limiter.limit("20/minute")
 async def upload_template_image(
     request: Request,
@@ -333,7 +333,7 @@ async def upload_template_image(
         raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
 
 
-@router.post("/admin/templates/{template_id}/upload-story-page")
+@router.post("/api/admin/templates/{template_id}/upload-story-page")
 @limiter.limit("30/minute")
 async def upload_single_story_page(
     request: Request,
@@ -419,7 +419,7 @@ async def upload_single_story_page(
         raise HTTPException(status_code=500, detail=f"Failed to upload story page: {str(e)}")
 
 
-@router.post("/admin/templates/{template_id}/upload-story-pages")
+@router.post("/api/admin/templates/{template_id}/upload-story-pages")
 @limiter.limit("20/minute")
 async def upload_story_pages(
     request: Request,
@@ -502,7 +502,7 @@ async def upload_story_pages(
         raise HTTPException(status_code=500, detail=f"Failed to upload story pages: {str(e)}")
 
 
-@router.patch("/admin/templates/{template_id}")
+@router.patch("/api/admin/templates/{template_id}")
 @limiter.limit("20/minute")
 async def update_template(
     request: Request,
