@@ -292,7 +292,7 @@ app.include_router(children_router)
 app.include_router(character_router)
 app.include_router(story_router)
 app.include_router(monitoring_router)
-app.include_router(admin_router)
+app.include_router(admin_router, prefix="/api")
 
 
 @app.websocket("/ws/story-progress")
