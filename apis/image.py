@@ -42,6 +42,23 @@ class SearchGameHintResponse(BaseModel):
     message: str
 
 
+class GenerateCoverImageRequest(BaseModel):
+    template_cover_url: HttpUrl
+    character_image_url: HttpUrl
+    story_world: str
+    character_name: str
+    character_type: str
+    character_style: str
+    age_group: str
+    story_title: str
+
+
+class GenerateCoverImageResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
 @router.post("/validate-image-quality/")
 @limiter.limit("30/minute")
 async def validate_image_quality_endpoint(request: Request, body: ImageRequest):
@@ -398,4 +415,129 @@ Example format: "Look in the upper right area near the colorful flowers" or "Che
         raise e
     except Exception as e:
         main.logger.error(f"Unexpected error in search_game_hint_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@router.post("/generate-cover-image/")
+@limiter.limit("20/minute")
+async def generate_cover_image_endpoint(request: Request, body: GenerateCoverImageRequest):
+    """
+    Generate a story cover image by compositing a character into a book template cover.
+    Uses the template cover as the base image and inserts the character from the character image.
+    """
+    import main  # Import here to avoid circular import
+    
+    if not main.gemini_client:
+        raise HTTPException(status_code=500, detail="Gemini client not initialized. Please check GEMINI_API_KEY.")
+    
+    try:
+        # Convert HttpUrl to string for processing
+        template_cover_url_str = str(body.template_cover_url)
+        character_image_url_str = str(body.character_image_url)
+        
+        # Download both images
+        main.logger.info(f"Downloading template cover from: {template_cover_url_str}")
+        template_cover_data = main.download_image_from_url(template_cover_url_str)
+        
+        main.logger.info(f"Downloading character image from: {character_image_url_str}")
+        character_image_data = main.download_image_from_url(character_image_url_str)
+        
+        # Detect MIME types
+        template_mime_type = main.detect_image_mime_type(template_cover_data)
+        character_mime_type = main.detect_image_mime_type(character_image_data)
+        
+        # Encode images to base64
+        template_base64 = base64.b64encode(template_cover_data).decode('utf-8')
+        character_base64 = base64.b64encode(character_image_data).decode('utf-8')
+        
+        # Build the prompt for cover generation
+        cover_prompt = f"""You are creating a book cover by compositing a character into a template cover.
+
+TEMPLATE COVER: The first image is a book cover template for a {body.story_world} themed storybook.
+
+CHARACTER TO INSERT: The second image shows the character that needs to be inserted into this book cover scene.
+- Character Name: {body.character_name}
+- Character Type: {body.character_type}
+- Art Style: {body.character_style}
+- Book Title: "{body.story_title}"
+- Target Age Group: {body.age_group}
+
+INSTRUCTIONS:
+1. Place the character naturally into the template cover scene, making them the focal point
+2. The character should look like they belong in the {body.story_world} environment
+3. Maintain the character's original design, style, and features exactly as shown in the character image
+4. Ensure the character is well-integrated with the background (proper lighting, shadows, scale)
+5. Keep the overall composition balanced and appealing for a children's book cover
+6. The character should be prominent but not overwhelming
+7. Preserve any text or decorative elements from the template if present
+8. Match the art style of the character ({body.character_style}) with the overall composition
+
+OUTPUT: Generate the final book cover with the character naturally integrated into the scene."""
+        
+        # Send request to Gemini API with both images
+        main.logger.info("Sending images to Gemini API for cover generation...")
+        response = main.gemini_client.models.generate_content(
+            model=main.MODEL,
+            contents=[
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": cover_prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": template_mime_type,
+                                "data": template_base64
+                            }
+                        },
+                        {
+                            "inline_data": {
+                                "mime_type": character_mime_type,
+                                "data": character_base64
+                            }
+                        }
+                    ]
+                }
+            ],
+            config=main.types.GenerateContentConfig(
+                response_modalities=['IMAGE']
+            )
+        )
+        
+        # Extract the generated image from response
+        generated_image_data = None
+        for part in response.parts:
+            if hasattr(part, 'inline_data') and part.inline_data:
+                generated_image_data = base64.b64decode(part.inline_data.data)
+                break
+        
+        if not generated_image_data:
+            raise HTTPException(status_code=500, detail="No image data in Gemini response")
+        
+        main.logger.info("Cover image generated successfully, optimizing...")
+        
+        # Optimize image to JPG format for smaller file size
+        optimized_image = main.optimize_image_to_jpg(generated_image_data)
+        
+        # Generate unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"cover_image_{timestamp}_{unique_id}.jpg"
+        
+        # Upload optimized image to Supabase storage
+        storage_result = main.upload_to_supabase(optimized_image, filename)
+        
+        if storage_result["uploaded"] and storage_result.get("url"):
+            return GenerateCoverImageResponse(
+                success=True,
+                url=storage_result["url"],
+                message="Cover image generated and uploaded successfully"
+            )
+        else:
+            raise HTTPException(status_code=500, detail="Failed to upload cover image to storage")
+        
+    except HTTPException as e:
+        main.logger.error(f"HTTP Exception: {e.detail}")
+        raise e
+    except Exception as e:
+        main.logger.error(f"Unexpected error in generate_cover_image_endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
