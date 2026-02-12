@@ -608,21 +608,12 @@ def upload_to_supabase(image_data: bytes, filename: str, use_signed_url: bool = 
         logger.error(f"❌ Error uploading to Supabase: {e}")
         return {"uploaded": False, "url": None, "message": f"Upload error: {e}"}
 
-def edit_image(image_data, prompt, image_url=None, reference_image_data=None):
-    """Send image to Gemini API for editing/generation
-    
-    Args:
-        image_data: Base image data (bytes)
-        prompt: Text prompt for image generation
-        image_url: Optional URL of the image (for logging)
-        reference_image_data: Optional reference image data (bytes) for composition
-    """
+def edit_image(image_data, prompt, image_url=None):
+    """Send image to Gemini API for editing/generation"""
     if not gemini_client:
         raise HTTPException(status_code=500, detail="Gemini client not initialized. Please check GEMINI_API_KEY.")
     
     logger.info(f"Sending request to Gemini API with model: {MODEL}")
-    if reference_image_data:
-        logger.info("Reference image provided for composition")
     
     try:
         start_time = time.time()
@@ -634,29 +625,6 @@ def edit_image(image_data, prompt, image_url=None, reference_image_data=None):
         # Encode image to base64 for the dictionary format
         image_base64 = base64.b64encode(image_data).decode('utf-8')
         
-        # Build parts list with base image
-        parts = [
-            {"text": prompt},
-            {
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": image_base64
-                }
-            }
-        ]
-        
-        # Add reference image if provided
-        if reference_image_data:
-            reference_mime_type = detect_image_mime_type(reference_image_data)
-            reference_base64 = base64.b64encode(reference_image_data).decode('utf-8')
-            logger.info(f"Adding reference image, MIME type: {reference_mime_type}")
-            parts.append({
-                "inline_data": {
-                    "mime_type": reference_mime_type,
-                    "data": reference_base64
-                }
-            })
-        
         # Generate content with Gemini API using the expected dictionary format
         # The API expects contents to be a list with role and parts
         response = gemini_client.models.generate_content(
@@ -664,7 +632,15 @@ def edit_image(image_data, prompt, image_url=None, reference_image_data=None):
             contents=[
                 {
                     "role": "user",
-                    "parts": parts
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": image_base64
+                            }
+                        }
+                    ]
                 }
             ],
             config=types.GenerateContentConfig(
