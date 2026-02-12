@@ -45,12 +45,7 @@ class SearchGameHintResponse(BaseModel):
 class GenerateCoverImageRequest(BaseModel):
     template_cover_url: HttpUrl
     character_image_url: HttpUrl
-    story_world: str
-    character_name: str
-    character_type: str
-    character_style: str
-    age_group: str
-    story_title: str
+    prompt: str
 
 
 class GenerateCoverImageResponse(BaseModel):
@@ -423,7 +418,7 @@ Example format: "Look in the upper right area near the colorful flowers" or "Che
 async def generate_cover_image_endpoint(request: Request, body: GenerateCoverImageRequest):
     """
     Generate a story cover image by compositing a character into a book template cover.
-    Uses the template cover as the base image and inserts the character from the character image.
+    Takes three inputs: prompts, character image URL, and template book cover URL.
     """
     import main  # Import here to avoid circular import
     
@@ -450,31 +445,7 @@ async def generate_cover_image_endpoint(request: Request, body: GenerateCoverIma
         template_base64 = base64.b64encode(template_cover_data).decode('utf-8')
         character_base64 = base64.b64encode(character_image_data).decode('utf-8')
         
-        # Build the prompt for cover generation
-        cover_prompt = f"""You are creating a book cover by compositing a character into a template cover.
-
-TEMPLATE COVER: The first image is a book cover template for a {body.story_world} themed storybook.
-
-CHARACTER TO INSERT: The second image shows the character that needs to be inserted into this book cover scene.
-- Character Name: {body.character_name}
-- Character Type: {body.character_type}
-- Art Style: {body.character_style}
-- Book Title: "{body.story_title}"
-- Target Age Group: {body.age_group}
-
-INSTRUCTIONS:
-1. Place the character naturally into the template cover scene, making them the focal point
-2. The character should look like they belong in the {body.story_world} environment
-3. Maintain the character's original design, style, and features exactly as shown in the character image
-4. Ensure the character is well-integrated with the background (proper lighting, shadows, scale)
-5. Keep the overall composition balanced and appealing for a children's book cover
-6. The character should be prominent but not overwhelming
-7. Preserve any text or decorative elements from the template if present
-8. Match the art style of the character ({body.character_style}) with the overall composition
-
-OUTPUT: Generate the final book cover with the character naturally integrated into the scene."""
-        
-        # Send request to Gemini API with both images
+        # Send request to Gemini API with both images and the provided prompt
         main.logger.info("Sending images to Gemini API for cover generation...")
         response = main.gemini_client.models.generate_content(
             model=main.MODEL,
@@ -482,7 +453,7 @@ OUTPUT: Generate the final book cover with the character naturally integrated in
                 {
                     "role": "user",
                     "parts": [
-                        {"text": cover_prompt},
+                        {"text": body.prompt},
                         {
                             "inline_data": {
                                 "mime_type": template_mime_type,
