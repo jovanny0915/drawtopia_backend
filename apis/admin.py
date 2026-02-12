@@ -28,11 +28,13 @@ image_optimizer = TemplateImageOptimizer()
 class BookTemplateCreate(BaseModel):
     """Request model for creating a new book template"""
     name: str
+    story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
 
 
 class BookTemplateUpdate(BaseModel):
     """Request model for updating book template metadata"""
     name: Optional[str] = None
+    story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
     cover_image: Optional[str] = None
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
@@ -45,6 +47,7 @@ class BookTemplateResponse(BaseModel):
     """Response model for book template"""
     id: str
     name: str
+    story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
     cover_image: Optional[str] = None
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
@@ -190,15 +193,25 @@ async def create_template(request: Request, body: BookTemplateCreate):
     if not body.name or not body.name.strip():
         raise HTTPException(status_code=400, detail="Template name is required")
     
+    # Validate story_world if provided
+    valid_story_worlds = ['forest', 'underwater', 'outerspace']
+    if body.story_world and body.story_world not in valid_story_worlds:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
+        )
+    
     try:
-        response = supabase.table("book_templates").insert({
-            "name": body.name.strip()
-        }).execute()
+        insert_data = {"name": body.name.strip()}
+        if body.story_world:
+            insert_data["story_world"] = body.story_world
+        
+        response = supabase.table("book_templates").insert(insert_data).execute()
         
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create template")
         
-        logger.info(f"✅ Created template: {body.name}")
+        logger.info(f"✅ Created template: {body.name} (story_world: {body.story_world or 'none'})")
         
         return {
             "success": True,
@@ -496,14 +509,27 @@ async def update_template(
     template_id: str,
     body: BookTemplateUpdate
 ):
-    """Update book template metadata (name or image URLs)"""
+    """Update book template metadata (name, story_world, or image URLs)"""
     supabase = get_supabase_client()
     
     try:
+        # Validate story_world if provided
+        if body.story_world is not None:
+            valid_story_worlds = ['forest', 'underwater', 'outerspace']
+            # Empty string means clear the story_world
+            if body.story_world and body.story_world not in valid_story_worlds:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
+                )
+        
         # Build update data from non-None fields
         update_data = {}
         if body.name is not None:
             update_data["name"] = body.name.strip()
+        if body.story_world is not None:
+            # Convert empty string to None to clear the field
+            update_data["story_world"] = body.story_world if body.story_world else None
         if body.cover_image is not None:
             update_data["cover_image"] = body.cover_image
         if body.copyright_page_image is not None:
