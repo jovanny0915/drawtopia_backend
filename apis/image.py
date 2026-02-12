@@ -470,16 +470,50 @@ async def generate_cover_image_endpoint(request: Request, body: GenerateCoverIma
                 }
             ],
             config=main.types.GenerateContentConfig(
-                response_modalities=['IMAGE']
+                response_modalities=['TEXT', 'IMAGE']
             )
         )
         
-        # Extract the generated image from response
+        # Extract the generated image from response (same logic as edit_image)
         generated_image_data = None
         for part in response.parts:
-            if hasattr(part, 'inline_data') and part.inline_data:
-                generated_image_data = base64.b64decode(part.inline_data.data)
-                break
+            if part.text is not None:
+                main.logger.info(f"Gemini text response: {part.text}")
+            
+            # Check inline_data first - this is the most reliable source
+            if hasattr(part, 'inline_data'):
+                try:
+                    inline_data = part.inline_data
+                    main.logger.info(f"Found inline_data, type: {type(inline_data)}")
+                    
+                    # Try to get data from inline_data
+                    if inline_data and hasattr(inline_data, 'data'):
+                        data = inline_data.data
+                        if isinstance(data, bytes):
+                            generated_image_data = data
+                            main.logger.info(f"✅ Image extracted from inline_data.data (bytes) ({len(generated_image_data)} bytes)")
+                        elif isinstance(data, str):
+                            # Try to decode base64
+                            try:
+                                generated_image_data = base64.b64decode(data)
+                                main.logger.info(f"✅ Image extracted from inline_data.data (base64) ({len(generated_image_data)} bytes)")
+                            except Exception as e:
+                                main.logger.warning(f"Failed to decode base64 data: {e}")
+                                # If it's not base64, try encoding as latin-1 (unlikely but possible)
+                                generated_image_data = data.encode('latin-1')
+                                main.logger.info(f"✅ Image extracted from inline_data.data (string) ({len(generated_image_data)} bytes)")
+                    elif inline_data and hasattr(inline_data, 'bytes'):
+                        generated_image_data = inline_data.bytes
+                        main.logger.info(f"✅ Image extracted from inline_data.bytes ({len(generated_image_data)} bytes)")
+                    
+                    # Validate the extracted data
+                    if generated_image_data and len(generated_image_data) > 1000:
+                        main.logger.info(f"✅ Valid image extracted from inline_data ({len(generated_image_data)} bytes)")
+                        break
+                    elif generated_image_data:
+                        main.logger.warning(f"Image data too small ({len(generated_image_data)} bytes), continuing search...")
+                except Exception as e:
+                    main.logger.error(f"Error extracting from inline_data: {e}")
         
         if not generated_image_data:
             raise HTTPException(status_code=500, detail="No image data in Gemini response")
