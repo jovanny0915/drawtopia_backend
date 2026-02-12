@@ -17,6 +17,7 @@ router = APIRouter()
 class ImageRequest(BaseModel):
     image_url: HttpUrl
     prompt: str
+    reference_image_url: Optional[HttpUrl] = None  # Optional reference image for composition
 
 
 class CompareSimilarityRequest(BaseModel):
@@ -93,9 +94,16 @@ async def edit_image_endpoint(request: Request, body: ImageRequest):
         if not quality_validation.get("is_valid", True):
             main.logger.warning(f"Image quality validation failed: {quality_validation.get('issues', [])}")
         
+        # Download reference image if provided
+        reference_image_data = None
+        if body.reference_image_url:
+            reference_image_url_str = str(body.reference_image_url)
+            main.logger.info(f"Downloading reference image from: {reference_image_url_str}")
+            reference_image_data = main.download_image_from_url(reference_image_url_str)
+        
         # Send the image to Gemini API for editing
         main.logger.info(f"Received prompt: {body.prompt}")
-        edited_image = main.edit_image(image_data, body.prompt, image_url_str)
+        edited_image = main.edit_image(image_data, body.prompt, image_url_str, reference_image_data)
         
         # Optimize image to JPG format for smaller file size
         main.logger.info("Optimizing image to JPG format...")
