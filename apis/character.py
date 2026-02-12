@@ -80,7 +80,7 @@ async def list_characters(request: Request, parent_id: Optional[str] = None):
 @limiter.limit("30/minute")
 async def delete_character(request: Request, character_id: str, user_id: Optional[str] = None):
     """
-    Delete a character and update related stories
+    Delete a character and all associated images from storage
     
     Args:
         character_id: ID of the character to delete
@@ -90,6 +90,8 @@ async def delete_character(request: Request, character_id: str, user_id: Optiona
         Success message with details of the deletion
     """
     import main  # Import here to avoid circular import
+    from storage_utils import delete_character_images
+    
     try:
         if not main.supabase:
             raise HTTPException(
@@ -111,9 +113,21 @@ async def delete_character(request: Request, character_id: str, user_id: Optiona
                 detail="Character not found or you don't have permission to delete it"
             )
         
+        character_data = character_response.data[0]
+        
+        # Delete all character images from storage
+        main.logger.info(f"Deleting all images for character {character_id} from storage...")
+        try:
+            deletion_result = delete_character_images(main.supabase, character_data)
+            main.logger.info(f"Character image deletion result: {deletion_result['success']} succeeded, {deletion_result['errors']} failed")
+        except Exception as storage_error:
+            # Log but don't fail the deletion if storage cleanup fails
+            main.logger.error(f"Error deleting character images from storage: {storage_error}")
+        
         # Update all stories that reference this character - set character_id to null
         # Note: This operation is now disabled (not updating stories table)
         main.logger.info(f"Character {character_id} deletion - stories table update disabled")
+        updated_stories_count = 0  # Set to 0 since we're not updating stories
         
         # Delete the character
         delete_response = main.supabase.table("characters").delete().eq("id", character_id).execute()

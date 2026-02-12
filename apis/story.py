@@ -268,6 +268,7 @@ async def get_book_preview(request: Request, id: str):
 async def delete_book(request: Request, id: str):
     """
     Delete a book from the stories table by ID or UID
+    Also deletes associated images from storage (except character images and enhancement images)
     
     Args:
         id: Book ID (integer) or UID (string)
@@ -276,6 +277,8 @@ async def delete_book(request: Request, id: str):
         Success message with deleted book information
     """
     import main  # Import here to avoid circular import
+    from storage_utils import delete_story_images
+    
     try:
         if not main.supabase:
             raise HTTPException(
@@ -304,6 +307,19 @@ async def delete_book(request: Request, id: str):
         book_data = story_response.data[0]
         book_id = book_data.get("id")
         book_uid = book_data.get("uid")
+        
+        # Delete associated images from storage (exclude character images)
+        main.logger.info(f"Deleting images for story {id} from storage...")
+        try:
+            deletion_result = delete_story_images(
+                main.supabase, 
+                book_data, 
+                exclude_character_images=True  # Keep character image and enhancement images
+            )
+            main.logger.info(f"Image deletion result: {deletion_result['success']} succeeded, {deletion_result['errors']} failed")
+        except Exception as storage_error:
+            # Log but don't fail the deletion if storage cleanup fails
+            main.logger.error(f"Error deleting images from storage: {storage_error}")
         
         # Delete the book - try by id first (more reliable)
         if book_id:
