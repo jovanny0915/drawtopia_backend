@@ -69,6 +69,7 @@ class TextBlockOverlay(BaseModel):
 class OverlayTextOnImageRequest(BaseModel):
     image_url: HttpUrl
     text_blocks: List[TextBlockOverlay]
+    logo_url: Optional[HttpUrl] = None
 
 
 class OverlayTextOnImageResponse(BaseModel):
@@ -142,7 +143,8 @@ async def overlay_text_on_image_endpoint(request: Request, body: OverlayTextOnIm
         main.logger.info(f"Downloading image for text overlay from: {image_url_str}")
         image_data = main.download_image_from_url(image_url_str)
         blocks = [b.model_dump() for b in body.text_blocks]
-        result_bytes = main.overlay_text_on_image(image_data, blocks)
+        logo_url_str = str(body.logo_url) if body.logo_url else None
+        result_bytes = main.overlay_text_on_image(image_data, blocks, logo_url=logo_url_str)
         optimized = main.optimize_image_to_jpg(result_bytes)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]

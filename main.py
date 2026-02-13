@@ -535,15 +535,41 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
 def overlay_text_on_image(
     image_data: bytes,
     text_blocks: List[Dict[str, Any]],
+    logo_url: Optional[str] = None,
 ) -> bytes:
     """
     Draw decorated text blocks onto an image. Each block can have:
     text, font_size, color_hex, y_position (0-1), alignment (center|left|right), shadow (bool or dict).
+    If logo_url is provided, paste the logo at bottom-left before drawing text.
     """
     image = PILImage.open(BytesIO(image_data)).convert("RGB")
     width, height = image.size
-    draw = ImageDraw.Draw(image)
     padding = max(width, height) // 25  # ~4% padding
+
+    # Paste logo at bottom-left first (text will be drawn on top)
+    if logo_url:
+        try:
+            logo_data = download_image_from_url(logo_url)
+            logo_im = PILImage.open(BytesIO(logo_data))
+            if logo_im.mode in ("RGBA", "LA", "P"):
+                background = PILImage.new("RGB", logo_im.size, (255, 255, 255))
+                if logo_im.mode == "P":
+                    logo_im = logo_im.convert("RGBA")
+                if logo_im.mode in ("RGBA", "LA"):
+                    background.paste(logo_im, mask=logo_im.split()[-1])
+                    logo_im = background
+            elif logo_im.mode != "RGB":
+                logo_im = logo_im.convert("RGB")
+            max_logo_w = int(width * 0.28)
+            max_logo_h = int(height * 0.12)
+            logo_im.thumbnail((max_logo_w, max_logo_h), PILImage.Resampling.LANCZOS)
+            lw, lh = logo_im.size
+            y_logo = height - padding - lh
+            image.paste(logo_im, (padding, y_logo))
+        except Exception as e:
+            logger.warning(f"Could not paste logo on text-overlay image: {e}")
+
+    draw = ImageDraw.Draw(image)
 
     for block in text_blocks:
         text = block.get("text", "").strip()
