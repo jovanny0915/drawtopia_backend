@@ -40,6 +40,7 @@ class BookTemplateUpdate(BaseModel):
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
     last_story_page_image: Optional[str] = None
+    last_admin_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
 
 
@@ -53,6 +54,7 @@ class BookTemplateResponse(BaseModel):
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
     last_story_page_image: Optional[str] = None
+    last_admin_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
     created_at: Optional[str] = None
 
@@ -277,7 +279,7 @@ async def upload_template_image(
         template_id: ID of the template
         file: Image file to upload (will be optimized to WebP)
         field_key: Database field name (cover_image, copyright_page_image, dedication_page_image, 
-                   last_story_page_image, back_cover_image)
+                   last_story_page_image, last_admin_page_image, back_cover_image)
         template_name: Name of the template (for folder path)
     
     Returns:
@@ -288,7 +290,7 @@ async def upload_template_image(
     # Validate field_key
     valid_fields = [
         "cover_image", "copyright_page_image", "dedication_page_image",
-        "last_story_page_image", "back_cover_image"
+        "last_story_page_image", "last_admin_page_image", "back_cover_image"
     ]
     if field_key not in valid_fields:
         raise HTTPException(
@@ -540,6 +542,8 @@ async def update_template(
             update_data["story_page_images"] = body.story_page_images
         if body.last_story_page_image is not None:
             update_data["last_story_page_image"] = body.last_story_page_image
+        if body.last_admin_page_image is not None:
+            update_data["last_admin_page_image"] = body.last_admin_page_image
         if body.back_cover_image is not None:
             update_data["back_cover_image"] = body.back_cover_image
         
