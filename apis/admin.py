@@ -36,11 +36,7 @@ class BookTemplateUpdate(BaseModel):
     name: Optional[str] = None
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
     cover_image: Optional[str] = None
-    copyright_page_image: Optional[str] = None
-    dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
-    last_story_page_image: Optional[str] = None
-    last_admin_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
 
 
@@ -50,11 +46,7 @@ class BookTemplateResponse(BaseModel):
     name: str
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
     cover_image: Optional[str] = None
-    copyright_page_image: Optional[str] = None
-    dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
-    last_story_page_image: Optional[str] = None
-    last_admin_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
     created_at: Optional[str] = None
 
@@ -278,8 +270,7 @@ async def upload_template_image(
     Args:
         template_id: ID of the template
         file: Image file to upload (will be optimized to WebP)
-        field_key: Database field name (cover_image, copyright_page_image, dedication_page_image, 
-                   last_story_page_image, last_admin_page_image, back_cover_image)
+        field_key: Database field name (cover_image, back_cover_image)
         template_name: Name of the template (for folder path)
     
     Returns:
@@ -288,10 +279,7 @@ async def upload_template_image(
     supabase = get_supabase_client()
     
     # Validate field_key
-    valid_fields = [
-        "cover_image", "copyright_page_image", "dedication_page_image",
-        "last_story_page_image", "last_admin_page_image", "back_cover_image"
-    ]
+    valid_fields = ["cover_image", "back_cover_image"]
     if field_key not in valid_fields:
         raise HTTPException(
             status_code=400,
@@ -534,16 +522,8 @@ async def update_template(
             update_data["story_world"] = body.story_world if body.story_world else None
         if body.cover_image is not None:
             update_data["cover_image"] = body.cover_image
-        if body.copyright_page_image is not None:
-            update_data["copyright_page_image"] = body.copyright_page_image
-        if body.dedication_page_image is not None:
-            update_data["dedication_page_image"] = body.dedication_page_image
         if body.story_page_images is not None:
             update_data["story_page_images"] = body.story_page_images
-        if body.last_story_page_image is not None:
-            update_data["last_story_page_image"] = body.last_story_page_image
-        if body.last_admin_page_image is not None:
-            update_data["last_admin_page_image"] = body.last_admin_page_image
         if body.back_cover_image is not None:
             update_data["back_cover_image"] = body.back_cover_image
         

@@ -66,18 +66,6 @@ class TextBlockOverlay(BaseModel):
     shadow_offset: Optional[int] = 2
 
 
-class OverlayTextOnImageRequest(BaseModel):
-    image_url: HttpUrl
-    text_blocks: List[TextBlockOverlay]
-    logo_url: Optional[HttpUrl] = None
-
-
-class OverlayTextOnImageResponse(BaseModel):
-    success: bool
-    url: Optional[str] = None
-    message: str
-
-
 class OverlayBackCoverRequest(BaseModel):
     image_url: HttpUrl
     text_blocks: List[TextBlockOverlay]
@@ -127,40 +115,6 @@ async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRe
         raise
     except Exception as e:
         main.logger.error(f"Error in overlay_back_cover_endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/overlay-text-on-image/")
-@limiter.limit("30/minute")
-async def overlay_text_on_image_endpoint(request: Request, body: OverlayTextOnImageRequest):
-    """
-    Overlay decorated text (font, color, shadow) on an image. Used for copyright, dedication,
-    and last-words book pages. Returns the resulting image URL.
-    """
-    import main
-    try:
-        image_url_str = str(body.image_url)
-        main.logger.info(f"Downloading image for text overlay from: {image_url_str}")
-        image_data = main.download_image_from_url(image_url_str)
-        blocks = [b.model_dump() for b in body.text_blocks]
-        logo_url_str = str(body.logo_url) if body.logo_url else None
-        result_bytes = main.overlay_text_on_image(image_data, blocks, logo_url=logo_url_str)
-        optimized = main.optimize_image_to_jpg(result_bytes)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"text_overlay_{timestamp}_{unique_id}.jpg"
-        storage_result = main.upload_to_supabase(optimized, filename)
-        if storage_result.get("uploaded") and storage_result.get("url"):
-            return OverlayTextOnImageResponse(
-                success=True,
-                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
-                message="Text overlay applied and image uploaded successfully",
-            )
-        raise HTTPException(status_code=500, detail="Failed to upload overlay image to storage")
-    except HTTPException:
-        raise
-    except Exception as e:
-        main.logger.error(f"Error in overlay_text_on_image_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

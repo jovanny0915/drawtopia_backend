@@ -616,22 +616,6 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
 
         # ——— Step 3: Generate scene images ———
         main.logger.info("Step 3/3: Generating story scenes...")
-        dedication_image_url = None
-        if main.GEMINI_API_KEY and main.gemini_client and body.dedication_text and body.dedication_scene_prompt:
-            try:
-                dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
-                dedication_base_image = main.create_blank_base_image(width=768, height=1024)
-                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
-                optimized_dedication_image = main.optimize_image_to_jpg(dedication_image_bytes)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                unique_id = str(uuid.uuid4())[:8]
-                dedication_filename = f"dedication_{timestamp}_{unique_id}.jpg"
-                dedication_storage_result = main.upload_to_supabase(optimized_dedication_image, dedication_filename)
-                if dedication_storage_result.get("uploaded") and dedication_storage_result.get("url"):
-                    dedication_image_url = dedication_storage_result["url"]
-            except Exception as e:
-                main.logger.error(f"Error generating dedication image: {e}")
-
         reference_image_url = str(body.character_image_url) if body.character_image_url else None
         reference_image_data = None
         if reference_image_url:
@@ -729,7 +713,6 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
                 for p in story_pages_out
             ],
             "audio_urls": audio_urls,
-            "dedication_image_url": dedication_image_url,
             "full_story": story_result.get("full_story"),
             "word_count": story_result.get("word_count"),
             "page_word_counts": story_result.get("page_word_counts"),
@@ -837,23 +820,7 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
 
         # ——— Step 3: Generate scene images ———
         main.logger.info("Step 3/3: Generating story scenes...")
-        dedication_image_url = None
-        if main.GEMINI_API_KEY and main.gemini_client and body.dedication_text and body.dedication_scene_prompt:
-            try:
-                dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
-                dedication_base_image = main.create_blank_base_image(width=768, height=1024)
-                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
-                optimized_dedication_image = main.optimize_image_to_jpg(dedication_image_bytes)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                unique_id = str(uuid.uuid4())[:8]
-                dedication_filename = f"dedication_{timestamp}_{unique_id}.jpg"
-                dedication_storage_result = main.upload_to_supabase(optimized_dedication_image, dedication_filename)
-                if dedication_storage_result.get("uploaded") and dedication_storage_result.get("url"):
-                    dedication_image_url = dedication_storage_result["url"]
-            except Exception as e:
-                main.logger.error(f"Error generating dedication image: {e}")
         await _send_progress(session_id, 45)
-
         reference_image_url = str(body.character_image_url) if body.character_image_url else None
         reference_image_data = None
         if reference_image_url:
@@ -953,7 +920,6 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
                 for p in story_pages_out
             ],
             "audio_urls": audio_urls,
-            "dedication_image_url": dedication_image_url,
             "full_story": story_result.get("full_story"),
             "word_count": story_result.get("word_count"),
             "page_word_counts": story_result.get("page_word_counts"),
@@ -1092,29 +1058,6 @@ async def generate_story_scenes_endpoint(request: Request, body: StoryScenesRequ
         
         main.logger.info(f"Generating story scenes for character: {body.character_name}")
         
-        # Generate dedication image FIRST (if dedication info is provided)
-        dedication_image_url = None
-        if body.dedication_text and body.dedication_scene_prompt:
-            main.logger.info("Generating dedication page image...")
-            try:
-                dedication_reference_image_url = str(body.character_image_url) if body.character_image_url else None
-                dedication_base_image = main.create_blank_base_image(width=768, height=1024)
-                dedication_image_bytes = main.edit_image(dedication_base_image, body.dedication_scene_prompt, dedication_reference_image_url)
-                optimized_dedication_image = main.optimize_image_to_jpg(dedication_image_bytes)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                unique_id = str(uuid.uuid4())[:8]
-                dedication_filename = f"dedication_{timestamp}_{unique_id}.jpg"
-                dedication_storage_result = main.upload_to_supabase(optimized_dedication_image, dedication_filename)
-                if dedication_storage_result.get("uploaded") and dedication_storage_result.get("url"):
-                    dedication_image_url = dedication_storage_result["url"]
-                    main.logger.info(f"✅ Dedication image generated: {dedication_image_url}")
-                else:
-                    main.logger.warning("Failed to upload dedication image")
-            except Exception as e:
-                main.logger.error(f"Error generating dedication image: {e}")
-                import traceback
-                main.logger.debug(f"Traceback: {traceback.format_exc()}")
-        
         # Generate scene images for each page
         main.logger.info("Generating scene images for each story page...")
         reference_image_url = str(body.character_image_url) if body.character_image_url else None
@@ -1218,7 +1161,6 @@ async def generate_story_scenes_endpoint(request: Request, body: StoryScenesRequ
                 }
                 for p in story_pages
             ],
-            "dedication_image_url": dedication_image_url,
             "consistency_summary": consistency_summary,
         }
         
