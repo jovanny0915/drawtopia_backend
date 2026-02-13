@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from io import BytesIO
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
 from google.genai.types import Image as GeminiImage
@@ -502,6 +502,100 @@ def download_image_from_url(url):
         return response.content
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=400, detail=f"Failed to download image from URL {url}: {e}")
+
+
+def _get_font_for_size(font_size: int):
+    """Load a TrueType font at the given size. Falls back to PIL default if no TTF found."""
+    font_paths = [
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    for path in font_paths:
+        try:
+            if os.path.exists(path):
+                return ImageFont.truetype(path, font_size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    """Convert #RRGGBB to (r, g, b). Default to black if invalid."""
+    hex_color = hex_color.strip().lstrip("#")
+    if len(hex_color) == 6:
+        try:
+            return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            pass
+    return (0, 0, 0)
+
+
+def overlay_text_on_image(
+    image_data: bytes,
+    text_blocks: List[Dict[str, Any]],
+) -> bytes:
+    """
+    Draw decorated text blocks onto an image. Each block can have:
+    text, font_size, color_hex, y_position (0-1), alignment (center|left|right), shadow (bool or dict).
+    """
+    image = PILImage.open(BytesIO(image_data)).convert("RGB")
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    padding = max(width, height) // 25  # ~4% padding
+
+    for block in text_blocks:
+        text = block.get("text", "").strip()
+        if not text:
+            continue
+        font_size = max(12, min(200, int(block.get("font_size", 48))))
+        color_hex = block.get("color_hex", "#1a1a1a")
+        color = _hex_to_rgb(color_hex)
+        y_position = float(block.get("y_position", 0.5))
+        alignment = (block.get("alignment") or "center").lower()
+        if alignment not in ("center", "left", "right"):
+            alignment = "center"
+        use_shadow = block.get("shadow", True)
+        shadow_color = _hex_to_rgb(block.get("shadow_color", "#000000"))
+        shadow_offset = block.get("shadow_offset", 2)
+
+        font = _get_font_for_size(font_size)
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+        # Measure all lines to compute bounding box and line height
+        line_heights = []
+        max_line_width = 0
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            lw = bbox[2] - bbox[0]
+            lh = bbox[3] - bbox[1]
+            line_heights.append((lw, lh))
+            max_line_width = max(max_line_width, lw)
+        total_height = sum(h for _, h in line_heights) + (len(line_heights) - 1) * (font_size // 4)
+
+        # Vertical position: y_position 0 = top, 1 = bottom
+        block_top = int(height * y_position - total_height / 2)
+        block_top = max(padding, min(block_top, height - total_height - padding))
+
+        for i, line in enumerate(lines):
+            lw, lh = line_heights[i]
+            if alignment == "center":
+                x = (width - lw) // 2
+            elif alignment == "right":
+                x = width - lw - padding
+            else:
+                x = padding
+            y = block_top + sum(line_heights[j][1] for j in range(i)) + i * (font_size // 4)
+
+            if use_shadow:
+                draw.text((x + shadow_offset, y + shadow_offset), line, font=font, fill=shadow_color)
+            draw.text((x, y), line, font=font, fill=color)
+
+    out = BytesIO()
+    image.save(out, format="JPEG", quality=90, optimize=True)
+    return out.getvalue()
+
 
 def optimize_image_to_jpg(image_data: bytes, quality: int = 85) -> bytes:
     """Convert and optimize image to JPG format with compression while preserving original resolution"""

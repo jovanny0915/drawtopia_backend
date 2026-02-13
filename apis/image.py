@@ -4,7 +4,7 @@ Image API routes
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, HttpUrl
-from typing import Optional
+from typing import Optional, List, Any
 from io import BytesIO
 from datetime import datetime
 import uuid
@@ -52,6 +52,62 @@ class GenerateCoverImageResponse(BaseModel):
     success: bool
     url: Optional[str] = None
     message: str
+
+
+class TextBlockOverlay(BaseModel):
+    """One block of text to overlay on the image."""
+    text: str
+    font_size: Optional[int] = 48
+    color_hex: Optional[str] = "#1a1a1a"
+    y_position: Optional[float] = 0.5  # 0=top, 1=bottom
+    alignment: Optional[str] = "center"  # center | left | right
+    shadow: Optional[bool] = True
+    shadow_color: Optional[str] = "#000000"
+    shadow_offset: Optional[int] = 2
+
+
+class OverlayTextOnImageRequest(BaseModel):
+    image_url: HttpUrl
+    text_blocks: List[TextBlockOverlay]
+
+
+class OverlayTextOnImageResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
+@router.post("/overlay-text-on-image/")
+@limiter.limit("30/minute")
+async def overlay_text_on_image_endpoint(request: Request, body: OverlayTextOnImageRequest):
+    """
+    Overlay decorated text (font, color, shadow) on an image. Used for copyright, dedication,
+    and last-words book pages. Returns the resulting image URL.
+    """
+    import main
+    try:
+        image_url_str = str(body.image_url)
+        main.logger.info(f"Downloading image for text overlay from: {image_url_str}")
+        image_data = main.download_image_from_url(image_url_str)
+        blocks = [b.model_dump() for b in body.text_blocks]
+        result_bytes = main.overlay_text_on_image(image_data, blocks)
+        optimized = main.optimize_image_to_jpg(result_bytes)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"text_overlay_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return OverlayTextOnImageResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
+                message="Text overlay applied and image uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload overlay image to storage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in overlay_text_on_image_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/validate-image-quality/")
