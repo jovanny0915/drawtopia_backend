@@ -597,6 +597,88 @@ def overlay_text_on_image(
     return out.getvalue()
 
 
+def _generate_isbn13_barcode_image(isbn13: str) -> Optional[bytes]:
+    """Generate an ISBN-13 barcode as PNG bytes. isbn13 can be 12 or 13 digits."""
+    try:
+        from barcode import ISBN13
+        from barcode.writer import ImageWriter
+        digits = re.sub(r"\D", "", isbn13)[:13]
+        if len(digits) < 12:
+            digits = (digits + "000000000000")[:12]
+        if len(digits) == 13:
+            digits = digits[:12]
+        buf = BytesIO()
+        ISBN13(digits, writer=ImageWriter()).write(buf)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        logger.warning(f"Could not generate barcode: {e}")
+        return None
+
+
+def overlay_back_cover(
+    image_data: bytes,
+    text_blocks: List[Dict[str, Any]],
+    logo_url: Optional[str] = None,
+    barcode_isbn: Optional[str] = None,
+) -> bytes:
+    """
+    Composite back cover: paste logo (bottom-left) and barcode (bottom-right) first,
+    then draw text blocks on top so title, description, tagline, website are visible.
+    """
+    image = PILImage.open(BytesIO(image_data)).convert("RGB")
+    width, height = image.size
+    padding = max(width, height) // 20  # 5% padding
+
+    # Paste logo at bottom-left first (text will be drawn on top)
+    if logo_url:
+        try:
+            logo_data = download_image_from_url(logo_url)
+            logo_im = PILImage.open(BytesIO(logo_data))
+            if logo_im.mode in ("RGBA", "LA", "P"):
+                background = PILImage.new("RGB", logo_im.size, (255, 255, 255))
+                if logo_im.mode == "P":
+                    logo_im = logo_im.convert("RGBA")
+                if logo_im.mode in ("RGBA", "LA"):
+                    background.paste(logo_im, mask=logo_im.split()[-1])
+                    logo_im = background
+            elif logo_im.mode != "RGB":
+                logo_im = logo_im.convert("RGB")
+            max_logo_w = int(width * 0.28)
+            max_logo_h = int(height * 0.12)
+            logo_im.thumbnail((max_logo_w, max_logo_h), PILImage.Resampling.LANCZOS)
+            lw, lh = logo_im.size
+            y_logo = height - padding - lh
+            image.paste(logo_im, (padding, y_logo))
+        except Exception as e:
+            logger.warning(f"Could not paste logo on back cover: {e}")
+
+    # Generate and paste barcode at bottom-right
+    if barcode_isbn:
+        barcode_bytes = _generate_isbn13_barcode_image(barcode_isbn)
+        if barcode_bytes:
+            try:
+                barcode_im = PILImage.open(BytesIO(barcode_bytes)).convert("RGB")
+                max_barcode_h = int(height * 0.14)
+                w, h = barcode_im.size
+                if h > max_barcode_h:
+                    ratio = max_barcode_h / h
+                    new_w = int(w * ratio)
+                    barcode_im = barcode_im.resize((new_w, max_barcode_h), PILImage.Resampling.LANCZOS)
+                bw, bh = barcode_im.size
+                x_barcode = width - padding - bw
+                y_barcode = height - padding - bh
+                image.paste(barcode_im, (x_barcode, y_barcode))
+            except Exception as e:
+                logger.warning(f"Could not paste barcode on back cover: {e}")
+
+    # Draw all text on top (title, description, tagline, website, ISBN, age)
+    with_text_bytes = BytesIO()
+    image.save(with_text_bytes, format="JPEG", quality=90, optimize=True)
+    with_text_bytes.seek(0)
+    return overlay_text_on_image(with_text_bytes.getvalue(), text_blocks)
+
+
 def optimize_image_to_jpg(image_data: bytes, quality: int = 85) -> bytes:
     """Convert and optimize image to JPG format with compression while preserving original resolution"""
     try:

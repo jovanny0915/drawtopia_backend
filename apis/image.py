@@ -77,6 +77,58 @@ class OverlayTextOnImageResponse(BaseModel):
     message: str
 
 
+class OverlayBackCoverRequest(BaseModel):
+    image_url: HttpUrl
+    text_blocks: List[TextBlockOverlay]
+    logo_url: Optional[HttpUrl] = None
+    barcode_isbn: Optional[str] = None  # 12 or 13 digit ISBN for barcode
+
+
+class OverlayBackCoverResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
+@router.post("/overlay-back-cover/")
+@limiter.limit("20/minute")
+async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRequest):
+    """
+    Composite back cover: overlay text blocks and optionally paste logo (bottom-left)
+    and barcode (bottom-right) onto the template image.
+    """
+    import main
+    try:
+        image_url_str = str(body.image_url)
+        main.logger.info(f"Downloading back cover template from: {image_url_str}")
+        image_data = main.download_image_from_url(image_url_str)
+        blocks = [b.model_dump() for b in body.text_blocks]
+        logo_url_str = str(body.logo_url) if body.logo_url else None
+        result_bytes = main.overlay_back_cover(
+            image_data,
+            blocks,
+            logo_url=logo_url_str,
+            barcode_isbn=body.barcode_isbn,
+        )
+        optimized = main.optimize_image_to_jpg(result_bytes)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"back_cover_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return OverlayBackCoverResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
+                message="Back cover composite uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload back cover to storage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in overlay_back_cover_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/overlay-text-on-image/")
 @limiter.limit("30/minute")
 async def overlay_text_on_image_endpoint(request: Request, body: OverlayTextOnImageRequest):
