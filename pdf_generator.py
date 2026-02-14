@@ -480,128 +480,169 @@ def create_simple_scene_pdf(
         return False
 
 
+def _draw_full_page_image(
+    c: canvas.Canvas,
+    url: str,
+    margin: float,
+    image_width: float,
+    image_height: float,
+    page_label: str = "page",
+) -> bool:
+    """Download image from URL and draw it full-page (with margins). Returns True if drawn."""
+    if not url:
+        return False
+    image_data = download_image_from_url(url)
+    if not image_data:
+        logger.warning(f"Failed to download {page_label} image from {url}")
+        return False
+    try:
+        image = PILImage.open(BytesIO(image_data))
+        if image.mode in ('RGBA', 'LA', 'P'):
+            background = PILImage.new('RGB', image.size, (255, 255, 255))
+            if image.mode == 'P':
+                image = image.convert('RGBA')
+            if image.mode in ('RGBA', 'LA'):
+                background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
+                image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
+        img_reader = ImageReader(image)
+        c.drawImage(
+            img_reader,
+            x=margin,
+            y=margin,
+            width=image_width,
+            height=image_height,
+            preserveAspectRatio=True
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to process {page_label} image: {e}")
+        return False
+
+
+def _normalize_scene_urls(scene_urls) -> List[str]:
+    """Accept scene_urls as list or JSON/string representation of list."""
+    if scene_urls is None:
+        return []
+    if isinstance(scene_urls, list):
+        return [str(u) for u in scene_urls if u]
+    if isinstance(scene_urls, str):
+        try:
+            import json
+            parsed = json.loads(scene_urls)
+            return [str(u) for u in (parsed if isinstance(parsed, list) else [parsed]) if u]
+        except Exception:
+            pass
+        try:
+            import ast
+            parsed = ast.literal_eval(scene_urls)
+            return [str(u) for u in (parsed if isinstance(parsed, list) else [parsed]) if u]
+        except Exception:
+            pass
+    return []
+
+
 def create_book_pdf_with_cover(
     story_title: str,
     story_cover_url: Optional[str],
-    scene_urls: List[str],
-    output_buffer: BytesIO
+    scene_urls,
+    output_buffer: BytesIO,
+    copyright_image_url: Optional[str] = None,
+    dedication_image_url: Optional[str] = None,
+    last_word_page_image_url: Optional[str] = None,
+    last_admin_page_image_url: Optional[str] = None,
+    back_cover_image_url: Optional[str] = None,
 ) -> bool:
     """
-    Create a 6-page PDF with cover and scene images
-    
-    Format:
-    - Page 1: story_cover image (full page)
-    - Pages 2-6: scene_images (up to 5 images, full page each)
-    - A4 pagesize
-    - 1 inch margins
-    - preserveAspectRatio=True
+    Create a full book PDF with all page types. Images are printed full-page (1 inch margins).
+    Page order: cover, copyright, dedication, story pages, last words, last admin, back cover.
     """
     try:
         start_time = time.time()
-        logger.info(f"Creating book PDF: {story_title} with cover and {len(scene_urls)} scenes")
-        
-        # Create PDF canvas with A4 pagesize
+        scene_list = _normalize_scene_urls(scene_urls)
+        logger.info(
+            f"Creating book PDF: {story_title} — cover, copyright, dedication, "
+            f"{len(scene_list)} story pages, last words, last admin, back cover"
+        )
+
         c = canvas.Canvas(output_buffer, pagesize=A4)
         width, height = A4
-        
-        # Use 1 inch margins as specified
         margin = 1 * inch
         image_width = width - (2 * margin)
         image_height = height - (2 * margin)
-        
-        # === PAGE 1: COVER IMAGE ===
+        page_count = 0
+
+        # 1. Cover
         if story_cover_url:
             logger.info("Adding cover page...")
-            cover_image_data = download_image_from_url(story_cover_url)
-            if cover_image_data:
-                try:
-                    image = PILImage.open(BytesIO(cover_image_data))
-                    
-                    # Convert to RGB if necessary
-                    if image.mode in ('RGBA', 'LA', 'P'):
-                        background = PILImage.new('RGB', image.size, (255, 255, 255))
-                        if image.mode == 'P':
-                            image = image.convert('RGBA')
-                        if image.mode in ('RGBA', 'LA'):
-                            background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
-                            image = background
-                    elif image.mode != 'RGB':
-                        image = image.convert('RGB')
-                    
-                    img_reader = ImageReader(image)
-                    
-                    # Draw cover image with 1 inch margins and preserveAspectRatio
-                    c.drawImage(
-                        img_reader,
-                        x=margin,
-                        y=margin,
-                        width=image_width,
-                        height=image_height,
-                        preserveAspectRatio=True
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to process cover image: {e}")
-            else:
-                logger.warning(f"Failed to download cover image from {story_cover_url}")
-        else:
-            logger.warning("No cover image URL provided, skipping cover page")
-        
-        c.showPage()
-        
-        # === PAGES 2-6: SCENE IMAGES (up to 5 images) ===
-        # Limit to 5 scene images to make 6 pages total (1 cover + 5 scenes)
-        import ast
-
-        scene_urls_to_use = ast.literal_eval(scene_urls)
-
-        
-        for i, scene_url in enumerate(scene_urls_to_use, 1):
-            if scene_url:
-                logger.info(f"Adding scene {i}/{len(scene_urls_to_use)}...")
-                scene_image_data = download_image_from_url(scene_url)
-                if scene_image_data:
-                    try:
-                        image = PILImage.open(BytesIO(scene_image_data))
-                        
-                        # Convert to RGB if necessary
-                        if image.mode in ('RGBA', 'LA', 'P'):
-                            background = PILImage.new('RGB', image.size, (255, 255, 255))
-                            if image.mode == 'P':
-                                image = image.convert('RGBA')
-                            if image.mode in ('RGBA', 'LA'):
-                                background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
-                                image = background
-                        elif image.mode != 'RGB':
-                            image = image.convert('RGB')
-                        
-                        img_reader = ImageReader(image)
-                        
-                        # Draw scene image with 1 inch margins and preserveAspectRatio
-                        c.drawImage(
-                            img_reader,
-                            x=margin,
-                            y=margin,
-                            width=image_width,
-                            height=image_height,
-                            preserveAspectRatio=True
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to process scene {i} image: {e}")
-                else:
-                    logger.warning(f"Failed to download scene {i} image from {scene_url}")
-            else:
-                logger.warning(f"No scene URL provided for scene {i}, skipping scene page")
-            
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, story_cover_url, margin, image_width, image_height, "cover"):
+                page_count += 1
             c.showPage()
-        
-        # Save PDF
+
+        # 2. Copyright page (image)
+        if copyright_image_url:
+            logger.info("Adding copyright page...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, copyright_image_url, margin, image_width, image_height, "copyright"):
+                page_count += 1
+            c.showPage()
+
+        # 3. Dedication page (image)
+        if dedication_image_url:
+            logger.info("Adding dedication page...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, dedication_image_url, margin, image_width, image_height, "dedication"):
+                page_count += 1
+            c.showPage()
+
+        # 4. Story pages (scene images)
+        for i, scene_url in enumerate(scene_list, 1):
+            if not scene_url:
+                continue
+            logger.info(f"Adding story page {i}/{len(scene_list)}...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, scene_url, margin, image_width, image_height, f"scene {i}"):
+                page_count += 1
+            c.showPage()
+
+        # 5. Last words page
+        if last_word_page_image_url:
+            logger.info("Adding last words page...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, last_word_page_image_url, margin, image_width, image_height, "last words"):
+                page_count += 1
+            c.showPage()
+
+        # 6. Last admin page
+        if last_admin_page_image_url:
+            logger.info("Adding last admin page...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, last_admin_page_image_url, margin, image_width, image_height, "last admin"):
+                page_count += 1
+            c.showPage()
+
+        # 7. Back cover
+        if back_cover_image_url:
+            logger.info("Adding back cover page...")
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_full_page_image(c, back_cover_image_url, margin, image_width, image_height, "back cover"):
+                page_count += 1
+            c.showPage()
+
         c.save()
-        
         elapsed = time.time() - start_time
-        total_pages = (1 if story_cover_url else 0) + len(scene_urls_to_use)
-        logger.info(f"✅ Book PDF created successfully with {total_pages} pages in {elapsed:.2f} seconds")
+        logger.info(f"✅ Book PDF created successfully with {page_count} pages in {elapsed:.2f} seconds")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error creating book PDF: {e}")
         import traceback

@@ -15,7 +15,6 @@ from rate_limiter import limiter
 from story_lib import generate_story
 from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
-from pdf_xhtml_generator import create_story_pdf_xhtml
 from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, SetStoryGeneratingRequest
 
 if TYPE_CHECKING:
@@ -1373,17 +1372,7 @@ async def generate_book_pdf(request: Request, book_id: str):
             raise HTTPException(status_code=404, detail=f"Book {book_id} not found (tried both uid and id)")
         
         story = story_response.data[0]
-
-        # Fetch child first name for personalization
-        child_profile_id = story.get("child_profile_id")
-        if child_profile_id:
-            try:
-                cp_response = main.supabase.table("child_profiles").select("first_name").eq("id", child_profile_id).execute()
-                if cp_response.data and len(cp_response.data) > 0 and cp_response.data[0].get("first_name"):
-                    story["child_first_name"] = cp_response.data[0]["first_name"]
-            except Exception as e:
-                main.logger.warning(f"Could not fetch child profile for PDF: {e}")
-
+        
         # Check if PDF already exists
         if story.get("pdf_url"):
             main.logger.info(f"PDF already exists for book {book_id}: {story.get('pdf_url')}")
@@ -1392,33 +1381,43 @@ async def generate_book_pdf(request: Request, book_id: str):
                 "pdf_url": story.get("pdf_url"),
                 "message": "PDF already generated"
             }
-
-        # Check we have enough content for PDF (cover, scenes, dedication, last words, or back cover)
+        
+        # Prepare data for PDF generation
+        story_title = story.get("story_title") or "Untitled Story"
         story_cover = story.get("story_cover")
         scene_images = story.get("scene_images")
-        if isinstance(scene_images, str):
-            try:
-                scene_images = json.loads(scene_images)
-            except (json.JSONDecodeError, TypeError):
-                scene_images = []
-        has_scenes = scene_images and (len(scene_images) if isinstance(scene_images, list) else 0) > 0
-        has_dedication = story.get("copyright_image") or story.get("dedication_image") or story.get("dedication_text")
-        has_last_words = story.get("last_word_page_image") or story.get("last_admin_page_image")
-        has_back_cover = story.get("back_cover_image")
-        if not story_cover and not has_scenes and not has_dedication and not has_last_words and not has_back_cover:
+        copyright_image = story.get("copyright_image")
+        dedication_image = story.get("dedication_image")
+        last_word_page_image = story.get("last_word_page_image")
+        last_admin_page_image = story.get("last_admin_page_image")
+        back_cover_image = story.get("back_cover_image")
+        
+        # Check if we have at least cover or scene images (or other page images)
+        has_cover = bool(story_cover)
+        has_scenes = scene_images and (len(scene_images) if isinstance(scene_images, list) else True)
+        has_other = bool(copyright_image or dedication_image or last_word_page_image or last_admin_page_image or back_cover_image)
+        if not has_cover and not has_scenes and not has_other:
             raise HTTPException(
                 status_code=400,
-                detail="No cover image, scene images, dedication, last words, or back cover found. Cannot generate PDF."
+                detail="No cover image, scene images, or other page images found. Cannot generate PDF without images."
             )
-
-        # Generate PDF using xhtml2pdf (mobile-image-split structure)
-        main.logger.info(f"Generating PDF with xhtml2pdf for book {book_id}")
+        
+        # Generate full PDF: cover, copyright, dedication, story pages, last words, last admin, back cover
+        main.logger.info(
+            "Generating PDF: cover, copyright, dedication, story pages, last words, last admin, back cover"
+        )
+        
         output_buffer = BytesIO()
-        app_url = getattr(main, "FRONTEND_URL", None) or "https://drawtopia.ai"
-        success = create_story_pdf_xhtml(
-            story=story,
+        success = create_book_pdf_with_cover(
+            story_title=story_title,
+            story_cover_url=story_cover,
+            scene_urls=scene_images,
             output_buffer=output_buffer,
-            app_url=app_url,
+            copyright_image_url=copyright_image,
+            dedication_image_url=dedication_image,
+            last_word_page_image_url=last_word_page_image,
+            last_admin_page_image_url=last_admin_page_image,
+            back_cover_image_url=back_cover_image,
         )
         
         if not success:
