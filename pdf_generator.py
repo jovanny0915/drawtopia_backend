@@ -480,21 +480,12 @@ def create_simple_scene_pdf(
         return False
 
 
-def _draw_full_page_image(
-    c: canvas.Canvas,
-    url: str,
-    margin: float,
-    image_width: float,
-    image_height: float,
-    page_label: str = "page",
-) -> bool:
-    """Download image from URL and draw it full-page (with margins). Returns True if drawn."""
-    if not url:
-        return False
-    image_data = download_image_from_url(url)
+def _load_image_rgb(url: Optional[str] = None, image_data: Optional[bytes] = None) -> Optional[PILImage.Image]:
+    """Load image from URL or bytes and return as RGB PIL Image, or None on failure."""
+    if url and not image_data:
+        image_data = download_image_from_url(url)
     if not image_data:
-        logger.warning(f"Failed to download {page_label} image from {url}")
-        return False
+        return None
     try:
         image = PILImage.open(BytesIO(image_data))
         if image.mode in ('RGBA', 'LA', 'P'):
@@ -506,19 +497,63 @@ def _draw_full_page_image(
                 image = background
         elif image.mode != 'RGB':
             image = image.convert('RGB')
+        return image
+    except Exception as e:
+        logger.warning(f"Failed to load/convert image: {e}")
+        return None
+
+
+def _draw_image_cover_page(
+    c: canvas.Canvas,
+    image: PILImage.Image,
+    page_width: float,
+    page_height: float,
+) -> bool:
+    """
+    Draw image so it covers the entire page (like CSS object-fit: cover).
+    Image is scaled to fill the page and centered; no margins. One image = one full page.
+    """
+    if not image or not image.size[0] or not image.size[1]:
+        return False
+    try:
+        iw, ih = image.size[0], image.size[1]
+        scale = max(page_width / iw, page_height / ih)
+        draw_w = iw * scale
+        draw_h = ih * scale
+        x = (page_width - draw_w) / 2
+        y = (page_height - draw_h) / 2
         img_reader = ImageReader(image)
-        c.drawImage(
-            img_reader,
-            x=margin,
-            y=margin,
-            width=image_width,
-            height=image_height,
-            preserveAspectRatio=True
-        )
+        c.drawImage(img_reader, x, y, width=draw_w, height=draw_h)
         return True
     except Exception as e:
-        logger.warning(f"Failed to process {page_label} image: {e}")
+        logger.warning(f"Failed to draw image on page: {e}")
         return False
+
+
+def _draw_full_page_image(
+    c: canvas.Canvas,
+    url: str,
+    page_width: float,
+    page_height: float,
+    page_label: str = "page",
+) -> bool:
+    """Download image from URL and draw it to cover the full page (no margins). Returns True if drawn."""
+    if not url:
+        return False
+    image = _load_image_rgb(url=url)
+    if not image:
+        logger.warning(f"Failed to download {page_label} image from {url}")
+        return False
+    return _draw_image_cover_page(c, image, page_width, page_height)
+
+
+def _split_image_left_right(image: PILImage.Image):
+    """Split image into left half and right half. Returns (left_pil, right_pil)."""
+    w, h = image.size[0], image.size[1]
+    mid = w // 2
+    left = image.crop((0, 0, mid, h))
+    right = image.crop((mid, 0, w, h))
+    return left, right
 
 
 def _normalize_scene_urls(scene_urls) -> List[str]:
@@ -555,59 +590,69 @@ def create_book_pdf_with_cover(
     back_cover_image_url: Optional[str] = None,
 ) -> bool:
     """
-    Create a full book PDF with all page types. Images are printed full-page (1 inch margins).
-    Page order: cover, copyright, dedication, story pages, last words, last admin, back cover.
+    Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
+    Story page images are split into left half and right half; each half is one PDF page.
+    Page order: cover, copyright, dedication, story pages (each as left + right), last words, last admin, back cover.
     """
     try:
         start_time = time.time()
         scene_list = _normalize_scene_urls(scene_urls)
         logger.info(
             f"Creating book PDF: {story_title} — cover, copyright, dedication, "
-            f"{len(scene_list)} story pages, last words, last admin, back cover"
+            f"{len(scene_list)} story images (left+right each), last words, last admin, back cover"
         )
 
         c = canvas.Canvas(output_buffer, pagesize=A4)
         width, height = A4
-        margin = 1 * inch
-        image_width = width - (2 * margin)
-        image_height = height - (2 * margin)
         page_count = 0
 
-        # 1. Cover
+        # 1. Cover (one image = one full page, image covers whole page)
         if story_cover_url:
             logger.info("Adding cover page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, story_cover_url, margin, image_width, image_height, "cover"):
+            if _draw_full_page_image(c, story_cover_url, width, height, "cover"):
                 page_count += 1
             c.showPage()
 
-        # 2. Copyright page (image)
+        # 2. Copyright page
         if copyright_image_url:
             logger.info("Adding copyright page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, copyright_image_url, margin, image_width, image_height, "copyright"):
+            if _draw_full_page_image(c, copyright_image_url, width, height, "copyright"):
                 page_count += 1
             c.showPage()
 
-        # 3. Dedication page (image)
+        # 3. Dedication page
         if dedication_image_url:
             logger.info("Adding dedication page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, dedication_image_url, margin, image_width, image_height, "dedication"):
+            if _draw_full_page_image(c, dedication_image_url, width, height, "dedication"):
                 page_count += 1
             c.showPage()
 
-        # 4. Story pages (scene images)
+        # 4. Story pages: each scene image → left half page + right half page (each covers full PDF page)
         for i, scene_url in enumerate(scene_list, 1):
             if not scene_url:
                 continue
-            logger.info(f"Adding story page {i}/{len(scene_list)}...")
+            logger.info(f"Adding story image {i}/{len(scene_list)} as left + right pages...")
+            image = _load_image_rgb(url=scene_url)
+            if not image:
+                logger.warning(f"Failed to load story image {i} from {scene_url}, skipping")
+                continue
+            left_half, right_half = _split_image_left_right(image)
+            # Left half = one page
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, scene_url, margin, image_width, image_height, f"scene {i}"):
+            if _draw_image_cover_page(c, left_half, width, height):
+                page_count += 1
+            c.showPage()
+            # Right half = one page
+            c.setFillColor(white)
+            c.rect(0, 0, width, height, fill=1, stroke=0)
+            if _draw_image_cover_page(c, right_half, width, height):
                 page_count += 1
             c.showPage()
 
@@ -616,7 +661,7 @@ def create_book_pdf_with_cover(
             logger.info("Adding last words page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, last_word_page_image_url, margin, image_width, image_height, "last words"):
+            if _draw_full_page_image(c, last_word_page_image_url, width, height, "last words"):
                 page_count += 1
             c.showPage()
 
@@ -625,7 +670,7 @@ def create_book_pdf_with_cover(
             logger.info("Adding last admin page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, last_admin_page_image_url, margin, image_width, image_height, "last admin"):
+            if _draw_full_page_image(c, last_admin_page_image_url, width, height, "last admin"):
                 page_count += 1
             c.showPage()
 
@@ -634,7 +679,7 @@ def create_book_pdf_with_cover(
             logger.info("Adding back cover page...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, back_cover_image_url, margin, image_width, image_height, "back cover"):
+            if _draw_full_page_image(c, back_cover_image_url, width, height, "back cover"):
                 page_count += 1
             c.showPage()
 
