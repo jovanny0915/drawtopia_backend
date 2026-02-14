@@ -1391,6 +1391,7 @@ async def generate_book_pdf(request: Request, book_id: str):
         last_word_page_image = story.get("last_word_page_image")
         last_admin_page_image = story.get("last_admin_page_image")
         back_cover_image = story.get("back_cover_image")
+        back_cover_isbn = story.get("isbn") or story.get("back_cover_isbn")
         dedication_text = story.get("dedication_text") or ""
         character_name = story.get("character_name") or "[CHARACTER_NAME]"
         
@@ -1449,6 +1450,7 @@ async def generate_book_pdf(request: Request, book_id: str):
             copyright_character_name=character_name,
             dedication_body=dedication_body,
             dedication_signature=dedication_signature,
+            back_cover_isbn=back_cover_isbn,
         )
         
         if not success:

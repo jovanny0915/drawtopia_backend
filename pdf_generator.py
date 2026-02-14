@@ -742,10 +742,50 @@ def _draw_last_admin_page_text(
     c.drawString(cx - w / 2, y, "Drawtopia.ai")
 
 
-def _draw_back_cover_text(
-    c: canvas.Canvas, width: float, height: float
+# Barcode bar pattern from preview SVG (viewBox 0 0 120 70): black rects (x, width) at y=5, height=45
+_BARCODE_BARS = [
+    (2, 2), (7, 2), (12, 1), (17, 1), (19, 2), (22, 1), (27, 1), (29, 2), (32, 2), (35, 1), (37, 2), (40, 1), (42, 1), (44, 2), (47, 1), (49, 2), (52, 1), (54, 2), (57, 1), (59, 2), (62, 2), (65, 1), (67, 2), (70, 1), (72, 1), (74, 2), (77, 1), (79, 2), (82, 1), (84, 2), (87, 2), (90, 1), (92, 2), (95, 1), (97, 1), (99, 2), (102, 1), (104, 2), (107, 2),
+]
+
+
+def _draw_back_cover_barcode(
+    c: canvas.Canvas,
+    right_x: float,
+    bottom_y: float,
+    barcode_width_pt: float = 110,
+    barcode_height_pt: float = 56,
+    isbn_text: Optional[str] = None,
 ) -> None:
-    """Draw back cover text overlay (same content and style as preview)."""
+    """Draw ISBN barcode and text (same look as /preview/default back cover)."""
+    if isbn_text is None or not isbn_text.strip():
+        isbn_text = "1 234567 890128"
+    isbn_text = isbn_text.strip()
+    scale = barcode_width_pt / 120.0
+    bar_height = 45 * scale
+    padding = 3
+    box_height = bar_height + 14 + padding * 2
+    left_x = right_x - barcode_width_pt - padding * 2
+    # White background (match preview: padding/rounded rect)
+    c.setFillColor(white)
+    c.roundRect(left_x, bottom_y, barcode_width_pt + padding * 2, box_height, radius=2, fill=1, stroke=0)
+    # Black bars (same pattern as preview SVG); origin left of barcode area
+    c.setFillColor(black)
+    bar_y = bottom_y + padding + 14
+    for (sx, sw) in _BARCODE_BARS:
+        x = left_x + padding + sx * scale
+        w = max(0.5, sw * scale)
+        c.rect(x, bar_y, w, bar_height, fill=1, stroke=0)
+    # ISBN text below bars (centered under barcode)
+    c.setFillColor(black)
+    c.setFont("Helvetica", 8)
+    tw = c.stringWidth(isbn_text, "Helvetica", 8)
+    c.drawString(left_x + padding + (barcode_width_pt - tw) / 2, bottom_y + padding, isbn_text)
+
+
+def _draw_back_cover_text(
+    c: canvas.Canvas, width: float, height: float, isbn_text: Optional[str] = None
+) -> None:
+    """Draw back cover text overlay (same content and style as preview), including ISBN barcode."""
     cx = width / 2
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
@@ -774,10 +814,24 @@ def _draw_back_cover_text(
     y -= line_height
     c.setFont("Helvetica-Bold", 11)
     c.drawString(margin_x, y, "drawtopia.ai")
-    y = height * 0.18
+    # Bottom-right: ISBN label + barcode (same as preview)
+    y_bottom = height * 0.18
+    right_x = width - margin_x
+    barcode_w = min(110, (width - 2 * margin_x) * 0.35)
+    box_h = 45 * (barcode_w / 120) + 14 + 6
+    c.setFillColor(TEXT_WHITE)
     c.setFont("Helvetica", 9)
-    w = c.stringWidth("ISBN placeholder", "Helvetica", 9)
-    c.drawString(width - margin_x - w, y, "ISBN placeholder")
+    isbn_label = "ISBN placeholder" if not isbn_text or not isbn_text.strip() else isbn_text
+    w = c.stringWidth(isbn_label, "Helvetica", 9)
+    c.drawString(width - margin_x - w, y_bottom, isbn_label)
+    _draw_back_cover_barcode(
+        c,
+        right_x=right_x,
+        bottom_y=y_bottom - box_h - 6,
+        barcode_width_pt=barcode_w,
+        barcode_height_pt=56,
+        isbn_text=isbn_text or "1 234567 890128",
+    )
 
 
 def _normalize_scene_urls(scene_urls) -> List[str]:
@@ -816,6 +870,7 @@ def create_book_pdf_with_cover(
     copyright_character_name: Optional[str] = None,
     dedication_body: Optional[str] = None,
     dedication_signature: Optional[str] = None,
+    back_cover_isbn: Optional[str] = None,
 ) -> bool:
     """
     Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
@@ -916,7 +971,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, back_cover_image_url, width, height, "back cover"):
                 page_count += 1
-            _draw_back_cover_text(c, width, height)
+            _draw_back_cover_text(c, width, height, isbn_text=back_cover_isbn)
             c.showPage()
 
         c.save()
