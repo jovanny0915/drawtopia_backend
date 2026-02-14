@@ -556,6 +556,230 @@ def _split_image_left_right(image: PILImage.Image):
     return left, right
 
 
+# --- Text overlay styling (match /preview/default) ---
+# Preview uses Quicksand; PDF uses Helvetica for compatibility. Proportional sizes for A4.
+TEXT_WHITE = HexColor("#FFFFFF")
+TEXT_WHITE_92 = HexColor("#E6E6E6")  # rgba(255,255,255,0.92)
+TEXT_WHITE_85 = HexColor("#D9D9D9")  # rgba(255,255,255,0.85)
+
+
+def _wrap_lines(c: canvas.Canvas, text: str, max_width: float, font_name: str = "Helvetica", font_size: int = 11) -> List[str]:
+    """Wrap text into lines that fit within max_width. Returns list of lines."""
+    words = text.replace("\n", " \n ").split()
+    lines = []
+    current = []
+    for w in words:
+        if w == "\n":
+            if current:
+                lines.append(" ".join(current))
+                current = []
+            continue
+        trial = " ".join(current + [w]) if current else w
+        if c.stringWidth(trial, font_name, font_size) <= max_width:
+            current.append(w)
+        else:
+            if current:
+                lines.append(" ".join(current))
+            current = [w] if c.stringWidth(w, font_name, font_size) <= max_width else []
+            if current:
+                continue
+            # word longer than line: break by character not supported here, keep word
+            lines.append(w)
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
+def _draw_centered_text_block(
+    c: canvas.Canvas, x_center: float, y_start: float, lines: List[str],
+    font_name: str = "Helvetica", font_size: int = 11, leading: float = 14, color: Any = None
+) -> float:
+    """Draw lines centered at x_center, from y_start downward. Returns final y after last line."""
+    if color is not None:
+        c.setFillColor(color)
+    for line in lines:
+        w = c.stringWidth(line, font_name, font_size)
+        c.setFont(font_name, font_size)
+        c.drawString(x_center - w / 2, y_start, line)
+        y_start -= leading
+    return y_start
+
+
+def _draw_copyright_page_text(
+    c: canvas.Canvas, width: float, height: float,
+    child_name: str, character_name: str
+) -> None:
+    """Draw copyright page text overlay (same content and style as preview)."""
+    margin_x = width * 0.08
+    max_w = width - 2 * margin_x
+    cx = width / 2
+    y = height * 0.78
+    line_height = height * 0.028
+    c.setFillColor(TEXT_WHITE_92)
+    c.setFont("Helvetica-Bold", 12)
+    paras = [
+        f"This one-of-a-kind adventure story was created just for {child_name}.",
+        "Beyond these pages lies a magical world filled with wonder, mystery, and brave moments. Every scene unfolds a new chapter in the journey.",
+        f"Follow {character_name} through lands of shadow and light, where courage is tested and imagination guides the way forward.",
+        f"This story celebrates {child_name}'s creativity and courage. Turn the page and begin your adventure into the unknown—where magic awaits.",
+    ]
+    for p in paras:
+        lines = _wrap_lines(c, p, max_w, "Helvetica-Bold", 12)
+        for line in lines:
+            w = c.stringWidth(line, "Helvetica-Bold", 12)
+            c.drawString(cx - w / 2, y, line)
+            y -= line_height
+        y -= line_height * 0.5
+    y -= line_height * 2
+    c.setFillColor(TEXT_WHITE_85)
+    c.setFont("Helvetica", 10)
+    footer = "© 2026 Drawtopia. All rights reserved.\nPublished by Drawtopia | drawtopia.ai"
+    for line in footer.split("\n"):
+        w = c.stringWidth(line, "Helvetica", 10)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+
+
+def _draw_dedication_page_text(
+    c: canvas.Canvas, width: float, height: float,
+    child_name: str, body: str, signature: str
+) -> None:
+    """Draw dedication page text overlay (same content and style as preview)."""
+    max_w = width * 0.85
+    cx = width / 2
+    y = height * 0.72
+    line_height = height * 0.026
+    c.setFillColor(TEXT_WHITE)
+    c.setFont("Helvetica", 20)
+    title = f"Dear {child_name}"
+    w = c.stringWidth(title, "Helvetica", 20)
+    c.drawString(cx - w / 2, y, title)
+    y -= line_height * 2.5
+    if body:
+        lines = _wrap_lines(c, body, max_w, "Helvetica", 14)
+        c.setFont("Helvetica", 14)
+        for line in lines:
+            w = c.stringWidth(line, "Helvetica", 14)
+            c.drawString(cx - w / 2, y, line)
+            y -= line_height
+    else:
+        default = "In every tiny thing you do each day, never forget that you are loved enormously"
+        lines = _wrap_lines(c, default, max_w, "Helvetica", 14)
+        c.setFont("Helvetica", 14)
+        for line in lines:
+            w = c.stringWidth(line, "Helvetica", 14)
+            c.drawString(cx - w / 2, y, line)
+            y -= line_height
+    if signature:
+        y -= line_height
+        c.setFont("Helvetica", 12)
+        w = c.stringWidth(signature, "Helvetica", 12)
+        c.drawString(cx - w / 2, y, signature)
+
+
+def _draw_last_words_page_text(
+    c: canvas.Canvas, width: float, height: float, child_name: str
+) -> None:
+    """Draw last words page text overlay (same content and style as preview)."""
+    max_w = width * 0.88
+    cx = width / 2
+    y = height * 0.68
+    line_height = height * 0.026
+    c.setFillColor(TEXT_WHITE)
+    c.setFont("Helvetica-Bold", 20)
+    title = "A Special Thank You"
+    w = c.stringWidth(title, "Helvetica-Bold", 20)
+    c.drawString(cx - w / 2, y, title)
+    y -= line_height * 2
+    body = f"This magical adventure wouldn't exist without the incredible imagination of {child_name}. Thank you for sharing your creativity with the world!"
+    lines = _wrap_lines(c, body, max_w, "Helvetica", 12)
+    c.setFont("Helvetica", 12)
+    for line in lines:
+        w = c.stringWidth(line, "Helvetica", 12)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+    y -= line_height
+    tagline = "Every drawing tells a story. Yours told this one."
+    w = c.stringWidth(tagline, "Helvetica", 11)
+    c.setFont("Helvetica", 11)
+    c.drawString(cx - w / 2, y, tagline)
+
+
+def _draw_last_admin_page_text(
+    c: canvas.Canvas, width: float, height: float
+) -> None:
+    """Draw last admin page text overlay (same content and style as preview)."""
+    max_w = width * 0.88
+    cx = width / 2
+    y = height * 0.72
+    line_height = height * 0.024
+    c.setFillColor(TEXT_WHITE)
+    c.setFont("Helvetica-Bold", 18)
+    title = "Where Every Child Becomes a Storyteller"
+    lines = _wrap_lines(c, title, max_w, "Helvetica-Bold", 18)
+    for line in lines:
+        w = c.stringWidth(line, "Helvetica-Bold", 18)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+    y -= line_height
+    c.setFont("Helvetica", 11)
+    tagline = "Their imagination. Their characters. Their stories. Enhanced, not replaced."
+    lines = _wrap_lines(c, tagline, max_w, "Helvetica", 11)
+    for line in lines:
+        w = c.stringWidth(line, "Helvetica", 11)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+    y -= line_height
+    body = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
+    lines = _wrap_lines(c, body, max_w, "Helvetica", 11)
+    for line in lines:
+        w = c.stringWidth(line, "Helvetica", 11)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+    y = height * 0.12
+    c.setFont("Helvetica-Bold", 12)
+    w = c.stringWidth("Drawtopia.ai", "Helvetica-Bold", 12)
+    c.drawString(cx - w / 2, y, "Drawtopia.ai")
+
+
+def _draw_back_cover_text(
+    c: canvas.Canvas, width: float, height: float
+) -> None:
+    """Draw back cover text overlay (same content and style as preview)."""
+    cx = width / 2
+    margin_x = width * 0.06
+    max_w = width - 2 * margin_x
+    c.setFillColor(TEXT_WHITE)
+    y = height * 0.78
+    c.setFont("Helvetica-Bold", 24)
+    title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
+    for line in title_lines:
+        w = c.stringWidth(line, "Helvetica-Bold", 24)
+        c.drawString(cx - w / 2, y, line)
+        y -= height * 0.04
+    y -= height * 0.02
+    c.setFont("Helvetica", 11)
+    desc = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
+    lines = _wrap_lines(c, desc, max_w, "Helvetica", 11)
+    line_height = height * 0.022
+    for line in lines:
+        w = c.stringWidth(line, "Helvetica", 11)
+        c.drawString(cx - w / 2, y, line)
+        y -= line_height
+    y = height * 0.18
+    c.setFont("Helvetica", 10)
+    c.drawString(margin_x, y, "Their imagination. Their characters.")
+    y -= line_height
+    c.drawString(margin_x, y, "Their stories. Enhanced, not replaced.")
+    y -= line_height
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(margin_x, y, "drawtopia.ai")
+    y = height * 0.18
+    c.setFont("Helvetica", 9)
+    w = c.stringWidth("ISBN placeholder", "Helvetica", 9)
+    c.drawString(width - margin_x - w, y, "ISBN placeholder")
+
+
 def _normalize_scene_urls(scene_urls) -> List[str]:
     """Accept scene_urls as list or JSON/string representation of list."""
     if scene_urls is None:
@@ -588,12 +812,19 @@ def create_book_pdf_with_cover(
     last_word_page_image_url: Optional[str] = None,
     last_admin_page_image_url: Optional[str] = None,
     back_cover_image_url: Optional[str] = None,
+    copyright_child_name: Optional[str] = None,
+    copyright_character_name: Optional[str] = None,
+    dedication_body: Optional[str] = None,
+    dedication_signature: Optional[str] = None,
 ) -> bool:
     """
     Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
-    Story page images are split into left half and right half; each half is one PDF page.
-    Page order: cover, copyright, dedication, story pages (each as left + right), last words, last admin, back cover.
+    Story page images are split into left/right halves; each half is one PDF page.
+    Copyright, dedication, last words, last admin, and back cover pages show image + text overlay (same style as preview).
+    Page order: cover, copyright, dedication, story pages (left+right each), last words, last admin, back cover.
     """
+    child_name = (copyright_child_name or "[CHILD_NAME]").strip() or "[CHILD_NAME]"
+    character_name = (copyright_character_name or "[CHARACTER_NAME]").strip() or "[CHARACTER_NAME]"
     try:
         start_time = time.time()
         scene_list = _normalize_scene_urls(scene_urls)
@@ -615,22 +846,24 @@ def create_book_pdf_with_cover(
                 page_count += 1
             c.showPage()
 
-        # 2. Copyright page
+        # 2. Copyright page (image + text overlay, same style as preview)
         if copyright_image_url:
-            logger.info("Adding copyright page...")
+            logger.info("Adding copyright page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, copyright_image_url, width, height, "copyright"):
                 page_count += 1
+            _draw_copyright_page_text(c, width, height, child_name, character_name)
             c.showPage()
 
-        # 3. Dedication page
+        # 3. Dedication page (image + text overlay, same style as preview)
         if dedication_image_url:
-            logger.info("Adding dedication page...")
+            logger.info("Adding dedication page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, dedication_image_url, width, height, "dedication"):
                 page_count += 1
+            _draw_dedication_page_text(c, width, height, child_name, dedication_body or "", dedication_signature or "")
             c.showPage()
 
         # 4. Story pages: each scene image → left half page + right half page (each covers full PDF page)
@@ -656,31 +889,34 @@ def create_book_pdf_with_cover(
                 page_count += 1
             c.showPage()
 
-        # 5. Last words page
+        # 5. Last words page (image + text overlay, same style as preview)
         if last_word_page_image_url:
-            logger.info("Adding last words page...")
+            logger.info("Adding last words page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, last_word_page_image_url, width, height, "last words"):
                 page_count += 1
+            _draw_last_words_page_text(c, width, height, child_name)
             c.showPage()
 
-        # 6. Last admin page
+        # 6. Last admin page (image + text overlay, same style as preview)
         if last_admin_page_image_url:
-            logger.info("Adding last admin page...")
+            logger.info("Adding last admin page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, last_admin_page_image_url, width, height, "last admin"):
                 page_count += 1
+            _draw_last_admin_page_text(c, width, height)
             c.showPage()
 
-        # 7. Back cover
+        # 7. Back cover (image + text overlay, same style as preview)
         if back_cover_image_url:
-            logger.info("Adding back cover page...")
+            logger.info("Adding back cover page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, back_cover_image_url, width, height, "back cover"):
                 page_count += 1
+            _draw_back_cover_text(c, width, height)
             c.showPage()
 
         c.save()

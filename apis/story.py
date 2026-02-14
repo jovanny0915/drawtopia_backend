@@ -1391,6 +1391,33 @@ async def generate_book_pdf(request: Request, book_id: str):
         last_word_page_image = story.get("last_word_page_image")
         last_admin_page_image = story.get("last_admin_page_image")
         back_cover_image = story.get("back_cover_image")
+        dedication_text = story.get("dedication_text") or ""
+        character_name = story.get("character_name") or "[CHARACTER_NAME]"
+        
+        # Resolve child first name for copyright/dedication/last-words text (same as preview)
+        copyright_child_name = "[CHILD_NAME]"
+        child_profile_id = story.get("child_profile_id")
+        if child_profile_id and main.supabase:
+            try:
+                child_resp = main.supabase.table("child_profiles").select("first_name").eq("id", child_profile_id).execute()
+                if child_resp.data and len(child_resp.data) > 0 and child_resp.data[0].get("first_name"):
+                    copyright_child_name = child_resp.data[0]["first_name"]
+            except Exception as e:
+                main.logger.warning(f"Could not fetch child name for PDF: {e}")
+        
+        # Parse dedication into body and signature (same logic as preview)
+        import re
+        dedication_raw = (dedication_text or "").strip()
+        dedication_body = ""
+        dedication_signature = ""
+        if dedication_raw:
+            dash_match = re.search(r"\s+[—–\-]\s+(.+)$", dedication_raw)
+            if dash_match:
+                dedication_body = dedication_raw[: dash_match.start()].strip()
+                sig = (dash_match.group(1) or "").strip()
+                dedication_signature = f"— {sig}" if sig else ""
+            else:
+                dedication_body = dedication_raw
         
         # Check if we have at least cover or scene images (or other page images)
         has_cover = bool(story_cover)
@@ -1402,7 +1429,7 @@ async def generate_book_pdf(request: Request, book_id: str):
                 detail="No cover image, scene images, or other page images found. Cannot generate PDF without images."
             )
         
-        # Generate full PDF: cover, copyright, dedication, story pages, last words, last admin, back cover
+        # Generate full PDF: cover, copyright, dedication, story pages, last words, last admin, back cover (with text overlays)
         main.logger.info(
             "Generating PDF: cover, copyright, dedication, story pages, last words, last admin, back cover"
         )
@@ -1418,6 +1445,10 @@ async def generate_book_pdf(request: Request, book_id: str):
             last_word_page_image_url=last_word_page_image,
             last_admin_page_image_url=last_admin_page_image,
             back_cover_image_url=back_cover_image,
+            copyright_child_name=copyright_child_name,
+            copyright_character_name=character_name,
+            dedication_body=dedication_body,
+            dedication_signature=dedication_signature,
         )
         
         if not success:
