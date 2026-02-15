@@ -307,7 +307,7 @@ async def get_users(request: Request):
         response = (
             supabase
             .table("users")
-            .select("id,email,first_name,last_name,role,subscription_status,credit,created_at")
+            .select("id,email,first_name,last_name,avatar_url,user_metadata,role,subscription_status,credit,created_at")
             .order("created_at", desc=True)
             .execute()
         )
