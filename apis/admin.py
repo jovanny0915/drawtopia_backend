@@ -98,6 +98,67 @@ def sanitize_template_name(name: str) -> str:
     return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', name.lower().strip()))
 
 
+def _extract_avatar_url_from_metadata(user_obj: Any) -> Optional[str]:
+    """Extract avatar URL from Supabase Auth user metadata."""
+    metadata: Dict[str, Any] = {}
+
+    try:
+        metadata = getattr(user_obj, "user_metadata", None) or {}
+    except Exception:
+        metadata = {}
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    # Common keys from Google OAuth metadata.
+    avatar_url = (
+        metadata.get("avatar_url")
+        or metadata.get("picture")
+        or metadata.get("photo_url")
+    )
+    return avatar_url if isinstance(avatar_url, str) and avatar_url.strip() else None
+
+
+def _fetch_google_avatar_map_by_email(supabase: Any) -> Dict[str, str]:
+    """
+    Build a map of email -> avatar_url from Supabase Auth users.
+    Only Gmail users are included to match admin UI requirements.
+    """
+    avatar_map: Dict[str, str] = {}
+
+    try:
+        page = 1
+        per_page = 200
+
+        while True:
+            auth_response = supabase.auth.admin.list_users(page=page, per_page=per_page)
+            users_payload = getattr(auth_response, "users", None)
+            if users_payload is None:
+                users_payload = []
+
+            if not users_payload:
+                break
+
+            for auth_user in users_payload:
+                email = (getattr(auth_user, "email", None) or "").strip().lower()
+                if not email.endswith("@gmail.com"):
+                    continue
+
+                avatar_url = _extract_avatar_url_from_metadata(auth_user)
+                if avatar_url:
+                    avatar_map[email] = avatar_url
+
+            if len(users_payload) < per_page:
+                break
+
+            page += 1
+    except Exception as auth_error:
+        # Non-blocking: admin users table still works even if Auth lookup fails.
+        logger.warning(f"⚠️ Failed to enrich users with auth avatar metadata: {auth_error}")
+
+    return avatar_map
+
+
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
     """
     Upload file to Supabase storage with optimization and return public URL.
@@ -307,11 +368,22 @@ async def get_users(request: Request):
         response = (
             supabase
             .table("users")
-            .select("id,email,first_name,last_name,avatar_url,user_metadata,role,subscription_status,credit,created_at")
+            .select("id,email,first_name,last_name,role,subscription_status,credit,created_at")
             .order("created_at", desc=True)
             .execute()
         )
-        return {"success": True, "data": response.data or []}
+        rows = response.data or []
+
+        # Enrich Gmail users with avatar from Supabase Auth metadata (Google profile image).
+        avatar_map = _fetch_google_avatar_map_by_email(supabase)
+        for row in rows:
+            email = (row.get("email") or "").strip().lower()
+            if email.endswith("@gmail.com"):
+                row["avatar_url"] = avatar_map.get(email)
+            else:
+                row["avatar_url"] = None
+
+        return {"success": True, "data": rows}
     except Exception as e:
         logger.error(f"❌ Error fetching users: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch users: {str(e)}")
