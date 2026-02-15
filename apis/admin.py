@@ -200,6 +200,63 @@ async def get_story_counts_by_day(request: Request, days: int = Query(90, ge=7, 
         raise HTTPException(status_code=500, detail=f"Failed to fetch story counts: {str(e)}")
 
 
+@router.get("/admin/analysis/user-auth-counts-by-day")
+@limiter.limit("60/minute")
+async def get_user_auth_counts_by_day(request: Request, days: int = Query(90, ge=7, le=365)):
+    """
+    Get daily counts for login/register events from user_auth_history table.
+    Returns:
+    [
+      { date: "YYYY-MM-DD", login_count: number, register_count: number, total_count: number }
+    ]
+    """
+    supabase = get_supabase_client()
+    try:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        response = (
+            supabase
+            .table("user_auth_history")
+            .select("created_at,event_type")
+            .gte("created_at", since)
+            .execute()
+        )
+        rows = response.data if response.data else []
+
+        # Group by day and auth event type.
+        by_day: Dict[str, Dict[str, int]] = defaultdict(lambda: {"login_count": 0, "register_count": 0})
+        for row in rows:
+            created = row.get("created_at")
+            event_type = row.get("event_type")
+            if not created or event_type not in ("login", "register"):
+                continue
+
+            if isinstance(created, str):
+                day = created[:10]  # "YYYY-MM-DD"
+            else:
+                day = datetime.fromisoformat(str(created).replace("Z", "+00:00")).strftime("%Y-%m-%d")
+
+            if event_type == "login":
+                by_day[day]["login_count"] += 1
+            elif event_type == "register":
+                by_day[day]["register_count"] += 1
+
+        result = []
+        for day, counts in sorted(by_day.items()):
+            login_count = counts["login_count"]
+            register_count = counts["register_count"]
+            result.append({
+                "date": day,
+                "login_count": login_count,
+                "register_count": register_count,
+                "total_count": login_count + register_count
+            })
+
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"Error fetching user auth counts by day: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch user auth counts: {str(e)}")
+
+
 @router.get("/admin/templates")
 @limiter.limit("30/minute")
 async def get_templates(request: Request):
