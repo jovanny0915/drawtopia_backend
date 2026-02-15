@@ -98,67 +98,6 @@ def sanitize_template_name(name: str) -> str:
     return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', name.lower().strip()))
 
 
-def _extract_avatar_url_from_metadata(user_obj: Any) -> Optional[str]:
-    """Extract avatar URL from Supabase Auth user metadata."""
-    metadata: Dict[str, Any] = {}
-
-    try:
-        metadata = getattr(user_obj, "user_metadata", None) or {}
-    except Exception:
-        metadata = {}
-
-    if not isinstance(metadata, dict):
-        metadata = {}
-
-    # Common keys from Google OAuth metadata.
-    avatar_url = (
-        metadata.get("avatar_url")
-        or metadata.get("picture")
-        or metadata.get("photo_url")
-    )
-    return avatar_url if isinstance(avatar_url, str) and avatar_url.strip() else None
-
-
-def _fetch_google_avatar_map_by_email(supabase: Any) -> Dict[str, str]:
-    """
-    Build a map of email -> avatar_url from Supabase Auth users.
-    Only Gmail users are included to match admin UI requirements.
-    """
-    avatar_map: Dict[str, str] = {}
-
-    try:
-        page = 1
-        per_page = 200
-
-        while True:
-            auth_response = supabase.auth.admin.list_users(page=page, per_page=per_page)
-            users_payload = getattr(auth_response, "users", None)
-            if users_payload is None:
-                users_payload = []
-
-            if not users_payload:
-                break
-
-            for auth_user in users_payload:
-                email = (getattr(auth_user, "email", None) or "").strip().lower()
-                if not email.endswith("@gmail.com"):
-                    continue
-
-                avatar_url = _extract_avatar_url_from_metadata(auth_user)
-                if avatar_url:
-                    avatar_map[email] = avatar_url
-
-            if len(users_payload) < per_page:
-                break
-
-            page += 1
-    except Exception as auth_error:
-        # Non-blocking: admin users table still works even if Auth lookup fails.
-        logger.warning(f"⚠️ Failed to enrich users with auth avatar metadata: {auth_error}")
-
-    return avatar_map
-
-
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
     """
     Upload file to Supabase storage with optimization and return public URL.
@@ -372,18 +311,29 @@ async def get_users(request: Request):
             .order("created_at", desc=True)
             .execute()
         )
-        rows = response.data or []
+        users = response.data or []
 
-        # Enrich Gmail users with avatar from Supabase Auth metadata (Google profile image).
-        avatar_map = _fetch_google_avatar_map_by_email(supabase)
-        for row in rows:
-            email = (row.get("email") or "").strip().lower()
-            if email.endswith("@gmail.com"):
-                row["avatar_url"] = avatar_map.get(email)
-            else:
-                row["avatar_url"] = None
+        # Enrich Gmail users with profile avatar from Supabase auth metadata.
+        # Google OAuth users often store `avatar_url`/`picture` in auth metadata.
+        for user in users:
+            user["auth_avatar_url"] = None
+            email = (user.get("email") or "").strip().lower()
+            user_id = user.get("id")
 
-        return {"success": True, "data": rows}
+            if not email.endswith("@gmail.com") or not user_id:
+                continue
+
+            try:
+                auth_response = supabase.auth.admin.get_user_by_id(user_id)
+                auth_user = auth_response.user if auth_response else None
+                metadata = auth_user.user_metadata if auth_user and auth_user.user_metadata else {}
+                avatar_url = metadata.get("avatar_url") or metadata.get("picture")
+                if avatar_url:
+                    user["auth_avatar_url"] = avatar_url
+            except Exception as avatar_error:
+                logger.warning(f"Could not fetch auth avatar for user {user_id}: {avatar_error}")
+
+        return {"success": True, "data": users}
     except Exception as e:
         logger.error(f"❌ Error fetching users: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch users: {str(e)}")
