@@ -307,33 +307,11 @@ async def get_users(request: Request):
         response = (
             supabase
             .table("users")
-            .select("id,email,first_name,last_name,role,subscription_status,credit,created_at")
+            .select("id,email,first_name,last_name,avatar_url,role,subscription_status,credit,created_at")
             .order("created_at", desc=True)
             .execute()
         )
-        users = response.data or []
-
-        # Enrich Gmail users with profile avatar from Supabase auth metadata.
-        # Google OAuth users often store `avatar_url`/`picture` in auth metadata.
-        for user in users:
-            user["auth_avatar_url"] = None
-            email = (user.get("email") or "").strip().lower()
-            user_id = user.get("id")
-
-            if not email.endswith("@gmail.com") or not user_id:
-                continue
-
-            try:
-                auth_response = supabase.auth.admin.get_user_by_id(user_id)
-                auth_user = auth_response.user if auth_response else None
-                metadata = auth_user.user_metadata if auth_user and auth_user.user_metadata else {}
-                avatar_url = metadata.get("avatar_url") or metadata.get("picture")
-                if avatar_url:
-                    user["auth_avatar_url"] = avatar_url
-            except Exception as avatar_error:
-                logger.warning(f"Could not fetch auth avatar for user {user_id}: {avatar_error}")
-
-        return {"success": True, "data": users}
+        return {"success": True, "data": response.data or []}
     except Exception as e:
         logger.error(f"❌ Error fetching users: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch users: {str(e)}")
