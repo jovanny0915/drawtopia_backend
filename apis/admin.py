@@ -6,11 +6,13 @@ Handles all admin operations including:
 - Storage bucket file management
 - Image optimization before upload
 """
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from rate_limiter import limiter
+from datetime import datetime, timedelta
+from collections import defaultdict
 import os
 import logging
 from image_optimizer import TemplateImageOptimizer
@@ -166,6 +168,37 @@ async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None
 
 
 # ==================== API Endpoints ====================
+
+@router.get("/admin/analysis/story-counts-by-day")
+@limiter.limit("60/minute")
+async def get_story_counts_by_day(request: Request, days: int = Query(90, ge=7, le=365)):
+    """
+    Get counts of story generation per day from the stories table.
+    Returns list of { date: "YYYY-MM-DD", count: number } for the last `days` days.
+    """
+    supabase = get_supabase_client()
+    try:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        response = supabase.table("stories").select("created_at").gte("created_at", since).execute()
+        rows = response.data if response.data else []
+        # Group by date (day only)
+        by_day = defaultdict(int)
+        for row in rows:
+            created = row.get("created_at")
+            if not created:
+                continue
+            if isinstance(created, str):
+                day = created[:10]  # "YYYY-MM-DD"
+            else:
+                day = datetime.fromisoformat(str(created).replace("Z", "+00:00")).strftime("%Y-%m-%d")
+            by_day[day] += 1
+        # Sort by date and return list
+        result = [{"date": d, "count": c} for d, c in sorted(by_day.items())]
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"Error fetching story counts by day: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch story counts: {str(e)}")
+
 
 @router.get("/admin/templates")
 @limiter.limit("30/minute")
