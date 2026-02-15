@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import os
 import logging
+from uuid import uuid4
 from image_optimizer import TemplateImageOptimizer
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,26 @@ class BookTemplateResponse(BaseModel):
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
     created_at: Optional[str] = None
+
+
+class AdminUserCreate(BaseModel):
+    """Request model for creating a user profile from admin panel"""
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role: Optional[str] = "user"
+    subscription_status: Optional[str] = None
+    credit: Optional[int] = 0
+
+
+class AdminUserUpdate(BaseModel):
+    """Request model for updating user profile fields from admin panel"""
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role: Optional[str] = None
+    subscription_status: Optional[str] = None
+    credit: Optional[int] = None
 
 
 # ==================== Helper Functions ====================
@@ -274,6 +295,127 @@ async def get_templates(request: Request):
     except Exception as e:
         logger.error(f"❌ Error fetching templates: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
+
+
+@router.get("/admin/users")
+@limiter.limit("30/minute")
+async def get_users(request: Request):
+    """Get users list for admin user management table"""
+    supabase = get_supabase_client()
+
+    try:
+        response = (
+            supabase
+            .table("users")
+            .select("id,email,first_name,last_name,role,subscription_status,credit,created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return {"success": True, "data": response.data or []}
+    except Exception as e:
+        logger.error(f"❌ Error fetching users: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch users: {str(e)}")
+
+
+@router.post("/admin/users")
+@limiter.limit("10/minute")
+async def create_user(request: Request, body: AdminUserCreate):
+    """Create user record from admin panel"""
+    supabase = get_supabase_client()
+
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    try:
+        existing = (
+            supabase
+            .table("users")
+            .select("id")
+            .eq("email", email)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            raise HTTPException(status_code=409, detail="User with this email already exists")
+
+        insert_data = {
+            "id": str(uuid4()),
+            "email": email,
+            "first_name": (body.first_name or "").strip() or None,
+            "last_name": (body.last_name or "").strip() or None,
+            "role": (body.role or "user").strip() or "user",
+            "subscription_status": (body.subscription_status or "").strip() or None,
+            "credit": max(0, body.credit or 0),
+        }
+
+        response = supabase.table("users").insert(insert_data).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+
+        return {"success": True, "data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error creating user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
+
+@router.patch("/admin/users/{user_id}")
+@limiter.limit("20/minute")
+async def update_user(request: Request, user_id: str, body: AdminUserUpdate):
+    """Update user record from admin panel"""
+    supabase = get_supabase_client()
+
+    try:
+        update_data: Dict[str, Any] = {}
+        if body.email is not None:
+            update_data["email"] = body.email.strip().lower()
+        if body.first_name is not None:
+            update_data["first_name"] = body.first_name.strip() or None
+        if body.last_name is not None:
+            update_data["last_name"] = body.last_name.strip() or None
+        if body.role is not None:
+            update_data["role"] = body.role.strip() or "user"
+        if body.subscription_status is not None:
+            update_data["subscription_status"] = body.subscription_status.strip() or None
+        if body.credit is not None:
+            update_data["credit"] = max(0, body.credit)
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        response = supabase.table("users").update(update_data).eq("id", user_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {"success": True, "data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error updating user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+
+
+@router.delete("/admin/users/{user_id}")
+@limiter.limit("10/minute")
+async def delete_user(request: Request, user_id: str):
+    """Delete user record from admin panel"""
+    supabase = get_supabase_client()
+
+    try:
+        # Verify existence for cleaner error messages
+        existing = supabase.table("users").select("id,email").eq("id", user_id).single().execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        supabase.table("users").delete().eq("id", user_id).execute()
+        return {"success": True, "message": "User deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
 
 @router.post("/admin/templates")
