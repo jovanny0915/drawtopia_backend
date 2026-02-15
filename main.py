@@ -1537,15 +1537,8 @@ def verify_jwt_token(token: str) -> Optional[Dict]:
             # Try next secret
             continue
     
-    # If all secrets failed, try to decode without verification to get user info
-    # This is a fallback for development/debugging - in production, ensure SUPABASE_JWT_SECRET is set
-    try:
-        payload = jwt.decode(token, options={"verify_signature": False})
-        logger.warning("JWT signature verification failed, but decoded without verification for user extraction")
-        return payload
-    except Exception as e:
-        logger.warning(f"Failed to decode JWT token: {e}")
-        return None
+    logger.warning("JWT verification failed for all configured secrets")
+    return None
 
 
 def extract_user_from_token(authorization: Optional[str]) -> Optional[str]:
