@@ -9,7 +9,7 @@ Handles all admin operations including:
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from rate_limiter import limiter
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -17,6 +17,7 @@ import os
 import logging
 from uuid import uuid4
 from image_optimizer import TemplateImageOptimizer
+from storage_utils import delete_story_images, delete_character_images, delete_files_from_storage
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,28 @@ async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None
     except Exception as e:
         logger.error(f"⚠️ Error deleting folder from storage: {e}")
         # Don't raise exception - continue with template deletion even if storage cleanup fails
+
+
+def _safe_delete_eq(supabase_client, table_name: str, column: str, value: Any) -> int:
+    """Delete rows by equality and return deleted count (best-effort)."""
+    try:
+        response = supabase_client.table(table_name).delete().eq(column, value).execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        logger.warning(f"⚠️ Could not delete from {table_name} where {column}={value}: {e}")
+        return 0
+
+
+def _safe_delete_in(supabase_client, table_name: str, column: str, values: List[Any]) -> int:
+    """Delete rows by IN list and return deleted count (best-effort)."""
+    if not values:
+        return 0
+    try:
+        response = supabase_client.table(table_name).delete().in_(column, values).execute()
+        return len(response.data) if response.data else 0
+    except Exception as e:
+        logger.warning(f"⚠️ Could not delete from {table_name} where {column} IN (...): {e}")
+        return 0
 
 
 # ==================== API Endpoints ====================
@@ -400,7 +423,7 @@ async def update_user(request: Request, user_id: str, body: AdminUserUpdate):
 @router.delete("/admin/users/{user_id}")
 @limiter.limit("10/minute")
 async def delete_user(request: Request, user_id: str):
-    """Delete user record from admin panel"""
+    """Delete user and all related data/storage assets from admin panel"""
     supabase = get_supabase_client()
 
     try:
@@ -409,8 +432,161 @@ async def delete_user(request: Request, user_id: str):
         if not existing.data:
             raise HTTPException(status_code=404, detail="User not found")
 
-        supabase.table("users").delete().eq("id", user_id).execute()
-        return {"success": True, "message": "User deleted successfully"}
+        user_email = existing.data.get("email")
+
+        # 1) Collect child profiles for this parent
+        child_profiles = (
+            supabase.table("child_profiles")
+            .select("id,avatar_url")
+            .eq("parent_id", user_id)
+            .execute()
+        )
+        child_rows = child_profiles.data or []
+        child_ids = [row.get("id") for row in child_rows if row.get("id") is not None]
+        child_avatar_urls = [row.get("avatar_url") for row in child_rows if row.get("avatar_url")]
+
+        # 2) Collect characters for this user
+        characters_response = (
+            supabase.table("characters")
+            .select("id,original_image_url,enhanced_images")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        character_rows = characters_response.data or []
+        character_ids = [row.get("id") for row in character_rows if row.get("id") is not None]
+
+        # 3) Collect stories related to this user via user/child/character relations
+        story_map: Dict[Any, Dict[str, Any]] = {}
+
+        user_stories = (
+            supabase.table("stories")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        for row in (user_stories.data or []):
+            story_map[row.get("id")] = row
+
+        if child_ids:
+            child_stories = (
+                supabase.table("stories")
+                .select("*")
+                .in_("child_profile_id", child_ids)
+                .execute()
+            )
+            for row in (child_stories.data or []):
+                story_map[row.get("id")] = row
+
+        if character_ids:
+            character_stories = (
+                supabase.table("stories")
+                .select("*")
+                .in_("character_id", character_ids)
+                .execute()
+            )
+            for row in (character_stories.data or []):
+                story_map[row.get("id")] = row
+
+        story_rows = list(story_map.values())
+        story_ids = [row.get("id") for row in story_rows if row.get("id") is not None]
+
+        # 4) Delete related storage files (best-effort)
+        storage_files_deleted = 0
+        storage_files_failed = 0
+
+        for story in story_rows:
+            try:
+                # Full cleanup for admin delete: include character/enhanced images too.
+                deletion_result = delete_story_images(
+                    supabase,
+                    story,
+                    exclude_character_images=False
+                )
+                storage_files_deleted += deletion_result.get("success", 0)
+                storage_files_failed += deletion_result.get("errors", 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Story storage cleanup failed for story_id={story.get('id')}: {e}")
+
+        for character in character_rows:
+            try:
+                deletion_result = delete_character_images(supabase, character)
+                storage_files_deleted += deletion_result.get("success", 0)
+                storage_files_failed += deletion_result.get("errors", 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Character storage cleanup failed for character_id={character.get('id')}: {e}")
+
+        if child_avatar_urls:
+            try:
+                child_avatar_cleanup = delete_files_from_storage(supabase, child_avatar_urls)
+                storage_files_deleted += child_avatar_cleanup.get("success", 0)
+                storage_files_failed += child_avatar_cleanup.get("errors", 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Child avatar cleanup failed for user_id={user_id}: {e}")
+
+        # 5) Delete related rows from all known tables (best-effort per table)
+        deleted_counts: Dict[str, int] = {}
+
+        # Gifts and user activity
+        deleted_counts["gifts_by_user_id"] = _safe_delete_eq(supabase, "gifts", "user_id", user_id)
+        deleted_counts["gifts_by_from_user_id"] = _safe_delete_eq(supabase, "gifts", "from_user_id", user_id)
+        deleted_counts["gifts_by_to_user_id"] = _safe_delete_eq(supabase, "gifts", "to_user_id", user_id)
+        deleted_counts["user_auth_history"] = _safe_delete_eq(supabase, "user_auth_history", "user_id", user_id)
+        deleted_counts["push_subscriptions"] = _safe_delete_eq(supabase, "push_subscriptions", "user_id", user_id)
+        deleted_counts["subscriptions"] = _safe_delete_eq(supabase, "subscriptions", "user_id", user_id)
+        deleted_counts["book_generation_jobs_by_user"] = _safe_delete_eq(supabase, "book_generation_jobs", "user_id", user_id)
+        deleted_counts["book_purchases_by_user"] = _safe_delete_eq(supabase, "book_purchases", "user_id", user_id)
+        deleted_counts["search_game_results_by_user"] = _safe_delete_eq(supabase, "search_game_results", "user_id", user_id)
+
+        # Story-linked records
+        deleted_counts["stories"] = _safe_delete_in(supabase, "stories", "id", story_ids)
+        deleted_counts["book_purchases_by_story"] = _safe_delete_in(supabase, "book_purchases", "story_id", story_ids)
+        deleted_counts["search_game_results_by_story"] = _safe_delete_in(supabase, "search_game_results", "story_id", story_ids)
+        deleted_counts["gifts_by_story"] = _safe_delete_in(supabase, "gifts", "story_id", story_ids)
+
+        # Character-linked and child-linked records
+        deleted_counts["characters"] = _safe_delete_in(supabase, "characters", "id", character_ids)
+        deleted_counts["search_game_results_by_character"] = _safe_delete_in(supabase, "search_game_results", "character_id", character_ids)
+        deleted_counts["child_profiles"] = _safe_delete_in(supabase, "child_profiles", "id", child_ids)
+        deleted_counts["search_game_results_by_child"] = _safe_delete_in(supabase, "search_game_results", "child_profile_id", child_ids)
+        deleted_counts["book_generation_jobs_by_child"] = _safe_delete_in(supabase, "book_generation_jobs", "child_profile_id", child_ids)
+        deleted_counts["gifts_by_child"] = _safe_delete_in(supabase, "gifts", "child_profile_id", child_ids)
+
+        # 6) Delete user row in custom users table
+        deleted_counts["users"] = _safe_delete_eq(supabase, "users", "id", user_id)
+        if deleted_counts["users"] == 0:
+            # Safety: if row wasn't deleted, return error because this is primary target.
+            raise HTTPException(status_code=500, detail="Failed to delete user row from users table")
+
+        # 7) Try deleting auth user as final step (best-effort)
+        auth_user_deleted = False
+        try:
+            # Supabase admin SDKs differ by method name across versions.
+            if hasattr(supabase.auth.admin, "delete_user"):
+                supabase.auth.admin.delete_user(user_id)
+                auth_user_deleted = True
+            elif hasattr(supabase.auth.admin, "deleteUser"):
+                supabase.auth.admin.deleteUser(user_id)
+                auth_user_deleted = True
+        except Exception as e:
+            logger.warning(f"⚠️ Could not delete auth user {user_id}: {e}")
+
+        return {
+            "success": True,
+            "message": "User and related data deleted successfully",
+            "data": {
+                "user_id": user_id,
+                "email": user_email,
+                "auth_user_deleted": auth_user_deleted,
+                "related_story_count": len(story_ids),
+                "related_character_count": len(character_ids),
+                "related_child_profile_count": len(child_ids),
+                "storage_cleanup": {
+                    "files_deleted": storage_files_deleted,
+                    "files_failed": storage_files_failed
+                },
+                "deleted_counts": deleted_counts
+            }
+        }
     except HTTPException:
         raise
     except Exception as e:
