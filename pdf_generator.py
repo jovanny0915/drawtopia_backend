@@ -8,13 +8,14 @@ import time
 from io import BytesIO
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from pathlib import Path
 import requests
 from PIL import Image as PILImage
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from reportlab.lib.colors import HexColor, white, black
+from reportlab.lib.colors import HexColor, white, black, Color
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -562,6 +563,11 @@ TEXT_WHITE = HexColor("#FFFFFF")
 TEXT_WHITE_92 = HexColor("#E6E6E6")  # rgba(255,255,255,0.92)
 TEXT_WHITE_85 = HexColor("#D9D9D9")  # rgba(255,255,255,0.85)
 
+_BACK_COVER_LOGO_CANDIDATES = [
+    Path(__file__).resolve().parents[1] / "drawtopia_frontend" / "src" / "assets" / "white-logo.png",
+    Path(__file__).resolve().parent / "assets" / "white-logo.png",
+]
+
 
 def _wrap_lines(c: canvas.Canvas, text: str, max_width: float, font_name: str = "Helvetica", font_size: int = 11) -> List[str]:
     """Wrap text into lines that fit within max_width. Returns list of lines."""
@@ -603,6 +609,56 @@ def _draw_centered_text_block(
         c.drawString(x_center - w / 2, y_start, line)
         y_start -= leading
     return y_start
+
+
+def _draw_styled_centered_text_line(
+    c: canvas.Canvas,
+    text: str,
+    x_center: float,
+    y: float,
+    font_name: str,
+    font_size: float,
+    fill_color: Any,
+    stroke_color: Any,
+    stroke_width: float,
+) -> None:
+    """
+    Draw one centered line with layered shadow + stroke/fill.
+    This approximates the preview CSS text style in printable PDFs.
+    """
+    text_width = c.stringWidth(text, font_name, font_size)
+    x = x_center - text_width / 2
+
+    # Soft glow layers (approximation of CSS blur shadows)
+    glow_offsets = [
+        (0.0, 0.0, 0.14),
+        (0.0, -0.4, 0.18),
+        (0.0, 0.45, 0.12),
+    ]
+    for dx, dy, alpha in glow_offsets:
+        c.saveState()
+        c.setFont(font_name, font_size)
+        c.setFillColor(Color(1, 1, 1, alpha=alpha))
+        c.drawString(x + dx, y + dy, text)
+        c.restoreState()
+
+    # Drop shadow layer
+    c.saveState()
+    c.setFont(font_name, font_size)
+    c.setFillColor(Color(15 / 255, 10 / 255, 59 / 255, alpha=0.5))
+    c.drawString(x, y - max(1.0, font_size * 0.09), text)
+    c.restoreState()
+
+    # Stroke + fill text (paint-order: stroke fill)
+    t = c.beginText()
+    t.setTextOrigin(x, y)
+    t.setFont(font_name, font_size)
+    t.setTextRenderMode(2)  # fill + stroke
+    t.setLineWidth(stroke_width)
+    c.setStrokeColor(stroke_color)
+    c.setFillColor(fill_color)
+    t.textLine(text)
+    c.drawText(t)
 
 
 def _draw_copyright_page_text(
@@ -755,8 +811,8 @@ def _draw_back_cover_barcode(
 ) -> None:
     """Draw ISBN barcode block at bottom-right of back cover (same as preview)."""
     # Position: bottom-right, matching preview (bottom 1.5rem, right 1.75rem)
-    margin_right = width * 0.03
-    margin_bottom = height * 0.025
+    margin_right = width * 0.055
+    margin_bottom = height * 0.03
     # Barcode block size (preview: 110px x 56px for the svg, with wrap padding)
     box_w = width * 0.19  # ~113pt on A4
     box_h = height * 0.068   # ~57pt on A4
@@ -796,6 +852,12 @@ def _draw_back_cover_barcode(
     c.setFont("Helvetica", 10)
     lw = c.stringWidth(isbn_label, "Helvetica", 10)
     c.drawString(width - margin_right - lw, bottom + box_h + 4, isbn_label)
+    # Age label below barcode
+    age_text = "[Age 6-12]"
+    c.setFillColor(TEXT_WHITE)
+    c.setFont("Helvetica", 10)
+    aw = c.stringWidth(age_text, "Helvetica", 10)
+    c.drawString(width - margin_right - aw, bottom - 12, age_text)
 
 
 def _draw_back_cover_text(
@@ -805,31 +867,71 @@ def _draw_back_cover_text(
     cx = width / 2
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
-    c.setFillColor(TEXT_WHITE)
-    y = height * 0.78
-    c.setFont("Helvetica-Bold", 24)
+    y = height * 0.81
+    title_font_size = 35
+    title_line_gap = height * 0.06
+    stroke_width = max(2.0, title_font_size * 0.13)
+    title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
     for line in title_lines:
-        w = c.stringWidth(line, "Helvetica-Bold", 24)
-        c.drawString(cx - w / 2, y, line)
-        y -= height * 0.04
-    y -= height * 0.02
-    c.setFont("Helvetica", 11)
+        _draw_styled_centered_text_line(
+            c=c,
+            text=line,
+            x_center=cx,
+            y=y,
+            font_name="Helvetica-Bold",
+            font_size=title_font_size,
+            fill_color=TEXT_WHITE,
+            stroke_color=title_stroke,
+            stroke_width=stroke_width,
+        )
+        y -= title_line_gap
+    y -= height * 0.01
+    desc_font = 14
+    c.setFont("Helvetica", desc_font)
+    c.setFillColor(TEXT_WHITE)
     desc = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
-    lines = _wrap_lines(c, desc, max_w, "Helvetica", 11)
-    line_height = height * 0.022
+    lines = _wrap_lines(c, desc, max_w * 0.92, "Helvetica", desc_font)
+    line_height = desc_font * 1.5
     for line in lines:
-        w = c.stringWidth(line, "Helvetica", 11)
+        w = c.stringWidth(line, "Helvetica", desc_font)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
-    y = height * 0.18
-    c.setFont("Helvetica", 10)
-    c.drawString(margin_x, y, "Their imagination. Their characters.")
-    y -= line_height
-    c.drawString(margin_x, y, "Their stories. Enhanced, not replaced.")
-    y -= line_height
+
+    # Bottom-left block (logo + tagline + website), matching preview placement.
+    left_x = width * 0.055
+    bottom_margin = height * 0.03
+    logo_w = width * 0.23
+    logo_h = logo_w * 0.223  # Keep source aspect ratio close to white-logo.png
+    logo_drawn = False
+    for logo_path in _BACK_COVER_LOGO_CANDIDATES:
+        if logo_path.exists():
+            try:
+                c.drawImage(
+                    ImageReader(str(logo_path)),
+                    left_x,
+                    bottom_margin + 52,
+                    width=logo_w,
+                    height=logo_h,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                logo_drawn = True
+                break
+            except Exception as e:
+                logger.warning(f"Failed to draw back cover logo from {logo_path}: {e}")
+
+    c.setFillColor(TEXT_WHITE_92)
+    c.setFont("Helvetica-Oblique", 10.5)
+    c.drawString(left_x, bottom_margin + 38, "Their imagination. Their characters.")
+    c.drawString(left_x, bottom_margin + 24, "Their stories. Enhanced, not replaced.")
+    c.setFillColor(TEXT_WHITE)
     c.setFont("Helvetica-Bold", 11)
-    c.drawString(margin_x, y, "drawtopia.ai")
+    c.drawString(left_x, bottom_margin + 8, "drawtopia.ai")
+
+    if not logo_drawn:
+        logger.warning("Back cover logo not found; rendered text-only bottom-left block")
+
     # ISBN label + barcode block at bottom-right (same as preview)
     _draw_back_cover_barcode(c, width, height)
 
