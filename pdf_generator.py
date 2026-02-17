@@ -564,8 +564,8 @@ TEXT_WHITE_92 = HexColor("#E6E6E6")  # rgba(255,255,255,0.92)
 TEXT_WHITE_85 = HexColor("#D9D9D9")  # rgba(255,255,255,0.85)
 
 _BACK_COVER_LOGO_CANDIDATES = [
-    Path(__file__).resolve().parents[1] / "drawtopia_frontend" / "src" / "assets" / "white-logo.png",
     Path(__file__).resolve().parent / "assets" / "white-logo.png",
+    Path(__file__).resolve().parents[1] / "drawtopia_frontend" / "src" / "assets" / "white-logo.png",
 ]
 
 
