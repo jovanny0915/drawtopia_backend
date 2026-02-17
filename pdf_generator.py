@@ -991,6 +991,104 @@ def _draw_last_admin_page_text(
     c.restoreState()
 
 
+def _draw_vertical_gradient_overlay(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    rgb: tuple,
+    alpha_start: float,
+    alpha_end: float,
+    steps: int = 120,
+) -> None:
+    """Draw a vertical alpha gradient using thin horizontal strips."""
+    if height <= 0 or width <= 0 or steps <= 0:
+        return
+    r, g, b = rgb
+    strip_h = height / steps
+    for i in range(steps):
+        t = i / max(1, steps - 1)
+        alpha = alpha_start + (alpha_end - alpha_start) * t
+        if alpha <= 0:
+            continue
+        c.saveState()
+        c.setFillColor(Color(r, g, b, alpha=alpha))
+        c.rect(x, y + i * strip_h, width, strip_h + 0.4, fill=1, stroke=0)
+        c.restoreState()
+
+
+def _draw_horizontal_gradient_overlay(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    rgb: tuple,
+    alpha_start: float,
+    alpha_end: float,
+    steps: int = 120,
+) -> None:
+    """Draw a horizontal alpha gradient using thin vertical strips."""
+    if height <= 0 or width <= 0 or steps <= 0:
+        return
+    r, g, b = rgb
+    strip_w = width / steps
+    for i in range(steps):
+        t = i / max(1, steps - 1)
+        alpha = alpha_start + (alpha_end - alpha_start) * t
+        if alpha <= 0:
+            continue
+        c.saveState()
+        c.setFillColor(Color(r, g, b, alpha=alpha))
+        c.rect(x + i * strip_w, y, strip_w + 0.4, height, fill=1, stroke=0)
+        c.restoreState()
+
+
+def _draw_back_cover_blur_layers(c: canvas.Canvas, width: float, height: float) -> None:
+    """Match preview back cover top and bottom blue blur layers."""
+    blur_color = (91 / 255, 153 / 255, 175 / 255)  # #5B99AF
+    blur_h = height * 0.40
+    # Top blur: strongest at top edge, fades toward center.
+    _draw_vertical_gradient_overlay(
+        c=c,
+        x=0,
+        y=height - blur_h,
+        width=width,
+        height=blur_h,
+        rgb=blur_color,
+        alpha_start=0.0,
+        alpha_end=0.58,
+    )
+    # Bottom blur: strongest at bottom edge, fades upward.
+    _draw_vertical_gradient_overlay(
+        c=c,
+        x=0,
+        y=0,
+        width=width,
+        height=blur_h,
+        rgb=blur_color,
+        alpha_start=0.58,
+        alpha_end=0.0,
+    )
+
+
+def _draw_last_admin_left_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
+    """Match preview last-admin left-side blue gradient blur layer."""
+    blur_color = (68 / 255, 120 / 255, 159 / 255)  # #44789F
+    blur_w = width * 0.50
+    _draw_horizontal_gradient_overlay(
+        c=c,
+        x=0,
+        y=0,
+        width=blur_w,
+        height=height,
+        rgb=blur_color,
+        alpha_start=0.56,
+        alpha_end=0.0,
+    )
+
+
 # ISBN barcode pattern from preview SVG (viewBox 0 0 120 70): black bars as (x, width) in SVG units
 _BARCODE_BLACK_BARS = [
     (2, 2), (7, 2), (12, 1), (17, 1), (22, 1), (27, 1), (32, 2), (37, 2),
@@ -1275,6 +1373,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, last_admin_page_image_url, width, height, "last admin"):
                 page_count += 1
+            _draw_last_admin_left_blur_layer(c, width, height)
             _draw_last_admin_page_text(c, width, height)
             c.showPage()
 
@@ -1285,6 +1384,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, back_cover_image_url, width, height, "back cover"):
                 page_count += 1
+            _draw_back_cover_blur_layers(c, width, height)
             _draw_back_cover_text(c, width, height)
             c.showPage()
 
