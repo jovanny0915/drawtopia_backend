@@ -1073,8 +1073,8 @@ def _draw_back_cover_blur_layers(c: canvas.Canvas, width: float, height: float) 
         width=width,
         height=blur_h,
         rgb=blur_color,
-        alpha_start=0.0,
-        alpha_end=0.58,
+        alpha_start=0.58,
+        alpha_end=0.0,
     )
     # Bottom blur: strongest at bottom edge, fades upward.
     _draw_vertical_gradient_overlay(
@@ -1084,8 +1084,8 @@ def _draw_back_cover_blur_layers(c: canvas.Canvas, width: float, height: float) 
         width=width,
         height=blur_h,
         rgb=blur_color,
-        alpha_start=0.58,
-        alpha_end=0.0,
+        alpha_start=0.0,
+        alpha_end=0.58,
     )
 
 
