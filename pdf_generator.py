@@ -631,11 +631,11 @@ def _draw_styled_centered_text_line(
 
     # Soft glow layers (approximation of CSS blur shadows in preview)
     glow_offsets = [
-        (0.0, 0.0, 0.18),
-        (0.0, -0.6, 0.20),
-        (0.0, 0.6, 0.16),
-        (-0.8, 0.0, 0.11),
-        (0.8, 0.0, 0.11),
+        (0.0, 0.0, 0.22),
+        (0.0, -0.9, 0.20),
+        (0.0, 0.9, 0.18),
+        (-1.0, 0.0, 0.12),
+        (1.0, 0.0, 0.12),
     ]
     for dx, dy, alpha in glow_offsets:
         c.saveState()
@@ -644,27 +644,49 @@ def _draw_styled_centered_text_line(
         c.drawString(x + dx, y + dy, text)
         c.restoreState()
 
-    # Drop shadow layer
+    # Thicker drop shadow layers (requested to match preview)
     c.saveState()
     c.setFont(font_name, font_size)
-    c.setFillColor(Color(15 / 255, 10 / 255, 59 / 255, alpha=0.5))
-    c.drawString(x, y - max(1.0, font_size * 0.09), text)
+    c.setFillColor(Color(15 / 255, 10 / 255, 59 / 255, alpha=0.50))
+    c.drawString(x, y - max(1.4, font_size * 0.11), text)
+    c.setFillColor(Color(15 / 255, 10 / 255, 59 / 255, alpha=0.36))
+    c.drawString(x, y - max(2.0, font_size * 0.17), text)
+    c.setFillColor(Color(15 / 255, 10 / 255, 59 / 255, alpha=0.28))
+    c.drawString(x + 1.0, y - max(1.8, font_size * 0.14), text)
+    c.drawString(x - 1.0, y - max(1.8, font_size * 0.14), text)
     c.restoreState()
 
-    # Stroke + fill in one text pass for smoother edges.
+    # Manual outline pass for broader compatibility and cleaner look.
+    # Using multiple offset draws avoids reportlab text-render inconsistencies
+    # where thick stroke can overpower the white fill.
     c.saveState()
-    c.setLineWidth(stroke_width)
-    c.setStrokeColor(stroke_color)
-    c.setFillColor(fill_color)
-    t = c.beginText()
-    t.setTextOrigin(x, y)
-    t.setFont(font_name, font_size)
-    t.setTextRenderMode(2)  # fill + stroke
-    t.textLine(text)
-    c.drawText(t)
+    c.setFont(font_name, font_size)
+    outline = max(1.4, stroke_width * 0.8)
+    outer_outline = outline * 1.55
+    stroke_r = getattr(stroke_color, "red", 28 / 255)
+    stroke_g = getattr(stroke_color, "green", 89 / 255)
+    stroke_b = getattr(stroke_color, "blue", 111 / 255)
+    # Outer soft ring
+    c.setFillColor(Color(stroke_r, stroke_g, stroke_b, alpha=0.42))
+    outer_offsets = [
+        (-outer_outline, 0.0), (outer_outline, 0.0), (0.0, -outer_outline), (0.0, outer_outline),
+        (-outer_outline * 0.72, -outer_outline * 0.72), (-outer_outline * 0.72, outer_outline * 0.72),
+        (outer_outline * 0.72, -outer_outline * 0.72), (outer_outline * 0.72, outer_outline * 0.72),
+    ]
+    for dx, dy in outer_offsets:
+        c.drawString(x + dx, y + dy, text)
+    # Inner solid outline
+    c.setFillColor(stroke_color)
+    outline_offsets = [
+        (-outline, 0.0), (outline, 0.0), (0.0, -outline), (0.0, outline),
+        (-outline * 0.75, -outline * 0.75), (-outline * 0.75, outline * 0.75),
+        (outline * 0.75, -outline * 0.75), (outline * 0.75, outline * 0.75),
+    ]
+    for dx, dy in outline_offsets:
+        c.drawString(x + dx, y + dy, text)
     c.restoreState()
 
-    # Reinforce white interior so the title matches preview brightness.
+    # Bright fill on top (preview has strong white interior)
     c.saveState()
     c.setFont(font_name, font_size)
     c.setFillColor(fill_color)
@@ -879,9 +901,9 @@ def _draw_back_cover_text(
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
     y = height * 0.81
-    title_font_size = 33
-    title_line_gap = height * 0.058
-    stroke_width = max(1.6, title_font_size * 0.085)
+    title_font_size = 35
+    title_line_gap = height * 0.06
+    stroke_width = max(2.0, title_font_size * 0.13)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
     for line in title_lines:
