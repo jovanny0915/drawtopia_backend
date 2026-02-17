@@ -1202,14 +1202,17 @@ def create_book_pdf_with_cover(
             c.showPage()
 
         # 3. Dedication page (image + text overlay, same style as preview)
-        if dedication_image_url:
+        has_dedication_text = bool((dedication_body or "").strip() or (dedication_signature or "").strip())
+        has_dedication_image = bool((dedication_image_url or "").strip())
+        if has_dedication_image or has_dedication_text:
             logger.info("Adding dedication page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
-            if _draw_full_page_image(c, dedication_image_url, width, height, "dedication"):
-                page_count += 1
+            if has_dedication_image:
+                _draw_full_page_image(c, dedication_image_url, width, height, "dedication")
             _draw_dedication_page_text(c, width, height, child_name, dedication_body or "", dedication_signature or "")
             c.showPage()
+            page_count += 1
 
         # 4. Story pages: each scene image → left half page + right half page (each covers full PDF page)
         for i, scene_url in enumerate(scene_list, 1):
