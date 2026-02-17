@@ -1203,13 +1203,22 @@ def create_book_pdf_with_cover(
 
         # 3. Dedication page (image + text overlay, same style as preview)
         has_dedication_text = bool((dedication_body or "").strip() or (dedication_signature or "").strip())
-        has_dedication_image = bool((dedication_image_url or "").strip())
+        dedication_image_str = (dedication_image_url or "").strip()
+        has_dedication_image = bool(
+            dedication_image_str
+            and dedication_image_str.lower() not in {"null", "none", "undefined"}
+        )
         if has_dedication_image or has_dedication_text:
             logger.info("Adding dedication page (image + text)...")
             c.setFillColor(white)
             c.rect(0, 0, width, height, fill=1, stroke=0)
+            image_drawn = False
             if has_dedication_image:
-                _draw_full_page_image(c, dedication_image_url, width, height, "dedication")
+                image_drawn = _draw_full_page_image(c, dedication_image_str, width, height, "dedication")
+            if not image_drawn:
+                # Prevent blank white page when dedication image URL is invalid/missing.
+                c.setFillColor(HexColor("#1A3540"))
+                c.rect(0, 0, width, height, fill=1, stroke=0)
             _draw_dedication_page_text(c, width, height, child_name, dedication_body or "", dedication_signature or "")
             c.showPage()
             page_count += 1
