@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 import requests
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageFilter
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
@@ -1000,22 +1000,30 @@ def _draw_vertical_gradient_overlay(
     rgb: tuple,
     alpha_start: float,
     alpha_end: float,
-    steps: int = 120,
+    blur_radius: float = 4.0,
 ) -> None:
-    """Draw a vertical alpha gradient using thin horizontal strips."""
-    if height <= 0 or width <= 0 or steps <= 0:
+    """Draw a smooth vertical alpha gradient using an RGBA image overlay."""
+    if height <= 0 or width <= 0:
         return
     r, g, b = rgb
-    strip_h = height / steps
-    for i in range(steps):
-        t = i / max(1, steps - 1)
-        alpha = alpha_start + (alpha_end - alpha_start) * t
-        if alpha <= 0:
-            continue
-        c.saveState()
-        c.setFillColor(Color(r, g, b, alpha=alpha))
-        c.rect(x, y + i * strip_h, width, strip_h + 0.4, fill=1, stroke=0)
-        c.restoreState()
+    width_px = max(8, int(round(width * 2.0)))
+    height_px = max(8, int(round(height * 2.0)))
+    alpha_strip = PILImage.new("L", (1, height_px))
+    alpha_strip.putdata([
+        int(max(0, min(255, round((alpha_start + (alpha_end - alpha_start) * (i / max(1, height_px - 1))) * 255))))
+        for i in range(height_px)
+    ])
+    alpha_img = alpha_strip.resize((width_px, height_px), PILImage.Resampling.BICUBIC)
+    if blur_radius > 0:
+        alpha_img = alpha_img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    overlay = PILImage.new("RGBA", (width_px, height_px), (
+        int(max(0, min(255, round(r * 255)))),
+        int(max(0, min(255, round(g * 255)))),
+        int(max(0, min(255, round(b * 255)))),
+        0,
+    ))
+    overlay.putalpha(alpha_img)
+    c.drawImage(ImageReader(overlay), x, y, width=width, height=height, mask="auto")
 
 
 def _draw_horizontal_gradient_overlay(
@@ -1027,22 +1035,30 @@ def _draw_horizontal_gradient_overlay(
     rgb: tuple,
     alpha_start: float,
     alpha_end: float,
-    steps: int = 120,
+    blur_radius: float = 4.0,
 ) -> None:
-    """Draw a horizontal alpha gradient using thin vertical strips."""
-    if height <= 0 or width <= 0 or steps <= 0:
+    """Draw a smooth horizontal alpha gradient using an RGBA image overlay."""
+    if height <= 0 or width <= 0:
         return
     r, g, b = rgb
-    strip_w = width / steps
-    for i in range(steps):
-        t = i / max(1, steps - 1)
-        alpha = alpha_start + (alpha_end - alpha_start) * t
-        if alpha <= 0:
-            continue
-        c.saveState()
-        c.setFillColor(Color(r, g, b, alpha=alpha))
-        c.rect(x + i * strip_w, y, strip_w + 0.4, height, fill=1, stroke=0)
-        c.restoreState()
+    width_px = max(8, int(round(width * 2.0)))
+    height_px = max(8, int(round(height * 2.0)))
+    alpha_strip = PILImage.new("L", (width_px, 1))
+    alpha_strip.putdata([
+        int(max(0, min(255, round((alpha_start + (alpha_end - alpha_start) * (i / max(1, width_px - 1))) * 255))))
+        for i in range(width_px)
+    ])
+    alpha_img = alpha_strip.resize((width_px, height_px), PILImage.Resampling.BICUBIC)
+    if blur_radius > 0:
+        alpha_img = alpha_img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    overlay = PILImage.new("RGBA", (width_px, height_px), (
+        int(max(0, min(255, round(r * 255)))),
+        int(max(0, min(255, round(g * 255)))),
+        int(max(0, min(255, round(b * 255)))),
+        0,
+    ))
+    overlay.putalpha(alpha_img)
+    c.drawImage(ImageReader(overlay), x, y, width=width, height=height, mask="auto")
 
 
 def _draw_back_cover_blur_layers(c: canvas.Canvas, width: float, height: float) -> None:
