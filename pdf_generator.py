@@ -629,11 +629,13 @@ def _draw_styled_centered_text_line(
     text_width = c.stringWidth(text, font_name, font_size)
     x = x_center - text_width / 2
 
-    # Soft glow layers (approximation of CSS blur shadows)
+    # Soft glow layers (approximation of CSS blur shadows in preview)
     glow_offsets = [
-        (0.0, 0.0, 0.14),
-        (0.0, -0.4, 0.18),
-        (0.0, 0.45, 0.12),
+        (0.0, 0.0, 0.18),
+        (0.0, -0.6, 0.20),
+        (0.0, 0.6, 0.16),
+        (-0.8, 0.0, 0.11),
+        (0.8, 0.0, 0.11),
     ]
     for dx, dy, alpha in glow_offsets:
         c.saveState()
@@ -649,17 +651,28 @@ def _draw_styled_centered_text_line(
     c.drawString(x, y - max(1.0, font_size * 0.09), text)
     c.restoreState()
 
-    # Stroke + fill text (paint-order: stroke fill)
+    # Manual outline pass for broader compatibility and cleaner look.
+    # Using multiple offset draws avoids reportlab text-render inconsistencies
+    # where thick stroke can overpower the white fill.
     c.saveState()
-    c.setLineWidth(stroke_width)
-    c.setStrokeColor(stroke_color)
+    c.setFont(font_name, font_size)
+    c.setFillColor(stroke_color)
+    outline = max(1.2, stroke_width * 0.72)
+    outline_offsets = [
+        (-outline, 0.0), (outline, 0.0), (0.0, -outline), (0.0, outline),
+        (-outline * 0.72, -outline * 0.72), (-outline * 0.72, outline * 0.72),
+        (outline * 0.72, -outline * 0.72), (outline * 0.72, outline * 0.72),
+        (-outline * 1.35, 0.0), (outline * 1.35, 0.0), (0.0, -outline * 1.35), (0.0, outline * 1.35),
+    ]
+    for dx, dy in outline_offsets:
+        c.drawString(x + dx, y + dy, text)
+    c.restoreState()
+
+    # Bright fill on top (preview has strong white interior)
+    c.saveState()
+    c.setFont(font_name, font_size)
     c.setFillColor(fill_color)
-    t = c.beginText()
-    t.setTextOrigin(x, y)
-    t.setFont(font_name, font_size)
-    t.setTextRenderMode(2)  # fill + stroke
-    t.textLine(text)
-    c.drawText(t)
+    c.drawString(x, y, text)
     c.restoreState()
 
 
