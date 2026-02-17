@@ -890,7 +890,7 @@ def _draw_last_words_page_text(
     y = height * 0.61
     line_height = height * 0.05
     c.setFillColor(TEXT_WHITE)
-    title_font_size = 40
+    title_font_size = 32
     c.setFont(display_font, title_font_size)
     title = "A Special Thank You"
     w = c.stringWidth(title, display_font, title_font_size)
