@@ -1383,14 +1383,42 @@ async def generate_book_pdf(request: Request, book_id: str):
             }
         
         # Prepare data for PDF generation
+        # Some stories may store preview-page image URLs with either legacy keys
+        # (e.g., dedication_image) or template-style keys (e.g., dedication_page_image).
+        # Resolve both to ensure pages are not skipped during PDF generation.
+        def _first_non_empty(*values):
+            for value in values:
+                if isinstance(value, str):
+                    cleaned = value.strip()
+                    if cleaned:
+                        return cleaned
+                elif value:
+                    return value
+            return None
+
         story_title = story.get("story_title") or "Untitled Story"
         story_cover = story.get("story_cover")
         scene_images = story.get("scene_images")
-        copyright_image = story.get("copyright_image")
-        dedication_image = story.get("dedication_image")
-        last_word_page_image = story.get("last_word_page_image")
-        last_admin_page_image = story.get("last_admin_page_image")
-        back_cover_image = story.get("back_cover_image")
+        copyright_image = _first_non_empty(
+            story.get("copyright_image"),
+            story.get("copyright_page_image"),
+        )
+        dedication_image = _first_non_empty(
+            story.get("dedication_image"),
+            story.get("dedication_page_image"),
+        )
+        last_word_page_image = _first_non_empty(
+            story.get("last_word_page_image"),
+            story.get("last_words_page_image"),
+        )
+        last_admin_page_image = _first_non_empty(
+            story.get("last_admin_page_image"),
+            story.get("last_story_page_image"),
+        )
+        back_cover_image = _first_non_empty(
+            story.get("back_cover_image"),
+            story.get("back_page_image"),
+        )
         dedication_text = story.get("dedication_text") or ""
         character_name = story.get("character_name") or "[CHARACTER_NAME]"
         
