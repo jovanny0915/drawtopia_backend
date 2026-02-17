@@ -650,15 +650,17 @@ def _draw_styled_centered_text_line(
     c.restoreState()
 
     # Stroke + fill text (paint-order: stroke fill)
+    c.saveState()
+    c.setLineWidth(stroke_width)
+    c.setStrokeColor(stroke_color)
+    c.setFillColor(fill_color)
     t = c.beginText()
     t.setTextOrigin(x, y)
     t.setFont(font_name, font_size)
     t.setTextRenderMode(2)  # fill + stroke
-    t.setLineWidth(stroke_width)
-    c.setStrokeColor(stroke_color)
-    c.setFillColor(fill_color)
     t.textLine(text)
     c.drawText(t)
+    c.restoreState()
 
 
 def _draw_copyright_page_text(
