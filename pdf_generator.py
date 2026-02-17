@@ -890,15 +890,17 @@ def _draw_last_words_page_text(
     y = height * 0.61
     line_height = height * 0.05
     c.setFillColor(TEXT_WHITE)
-    title_font_size = 32
+    title_font_size = 40
     c.setFont(display_font, title_font_size)
     title = "A Special Thank You"
     w = c.stringWidth(title, display_font, title_font_size)
     title_x = cx - w / 2
+    # Draw multiple tightly-offset passes to increase perceived title thickness in PDF.
     c.drawString(title_x, y, title)
-    # Slight offset redraw to make the display title appear visually thicker in PDF output.
-    c.drawString(title_x + 0.35, y, title)
-    y -= line_height * 1.45
+    c.drawString(title_x + 0.45, y, title)
+    c.drawString(title_x + 0.9, y, title)
+    c.drawString(title_x + 0.45, y + 0.25, title)
+    y -= line_height * 1.60
     body = f"This magical adventure wouldn't exist without the incredible imagination of {child_name}. Thank you for sharing your creativity with the world!"
     lines = _wrap_lines(c, body, max_w, regular_font, 20)
     c.setFont(regular_font, 20)
