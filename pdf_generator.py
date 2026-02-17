@@ -558,10 +558,93 @@ def _split_image_left_right(image: PILImage.Image):
 
 
 # --- Text overlay styling (match /preview/default) ---
-# Preview uses Quicksand; PDF uses Helvetica for compatibility. Proportional sizes for A4.
 TEXT_WHITE = HexColor("#FFFFFF")
 TEXT_WHITE_92 = HexColor("#E6E6E6")  # rgba(255,255,255,0.92)
 TEXT_WHITE_85 = HexColor("#D9D9D9")  # rgba(255,255,255,0.85)
+
+_SPECIAL_PAGE_FONT_STATE = {
+    "initialized": False,
+    "regular": "Helvetica",
+    "medium": "Helvetica",
+    "semibold": "Helvetica-Bold",
+    "bold": "Helvetica-Bold",
+    "italic": "Helvetica-Oblique",
+    "display": "Times-Roman",
+}
+
+
+def _register_first_available_font(font_name: str, candidates: List[Path]) -> bool:
+    """Register the first available TTF font file under font_name."""
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                pdfmetrics.registerFont(TTFont(font_name, str(candidate)))
+                return True
+        except Exception as e:
+            logger.debug(f"Failed to register font {font_name} from {candidate}: {e}")
+    return False
+
+
+def _ensure_special_page_fonts() -> None:
+    """Initialize special-page fonts once, with robust fallback fonts."""
+    if _SPECIAL_PAGE_FONT_STATE["initialized"]:
+        return
+
+    backend_fonts_dir = Path(__file__).resolve().parent / "assets" / "fonts"
+    windows_fonts = Path("C:/Windows/Fonts")
+
+    if _register_first_available_font(
+        "DrawtopiaQuicksandRegular",
+        [
+            backend_fonts_dir / "Quicksand-Regular.ttf",
+            backend_fonts_dir / "Quicksand-VariableFont_wght.ttf",
+            windows_fonts / "Quicksand-Regular.ttf",
+            windows_fonts / "Quicksand-VariableFont_wght.ttf",
+        ],
+    ):
+        _SPECIAL_PAGE_FONT_STATE["regular"] = "DrawtopiaQuicksandRegular"
+
+    if _register_first_available_font(
+        "DrawtopiaQuicksandMedium",
+        [
+            backend_fonts_dir / "Quicksand-Medium.ttf",
+            windows_fonts / "Quicksand-Medium.ttf",
+        ],
+    ):
+        _SPECIAL_PAGE_FONT_STATE["medium"] = "DrawtopiaQuicksandMedium"
+    else:
+        _SPECIAL_PAGE_FONT_STATE["medium"] = _SPECIAL_PAGE_FONT_STATE["regular"]
+
+    if _register_first_available_font(
+        "DrawtopiaQuicksandSemiBold",
+        [
+            backend_fonts_dir / "Quicksand-SemiBold.ttf",
+            windows_fonts / "Quicksand-SemiBold.ttf",
+        ],
+    ):
+        _SPECIAL_PAGE_FONT_STATE["semibold"] = "DrawtopiaQuicksandSemiBold"
+    else:
+        _SPECIAL_PAGE_FONT_STATE["semibold"] = _SPECIAL_PAGE_FONT_STATE["bold"]
+
+    if _register_first_available_font(
+        "DrawtopiaQuicksandBold",
+        [
+            backend_fonts_dir / "Quicksand-Bold.ttf",
+            windows_fonts / "Quicksand-Bold.ttf",
+        ],
+    ):
+        _SPECIAL_PAGE_FONT_STATE["bold"] = "DrawtopiaQuicksandBold"
+
+    if _register_first_available_font(
+        "DrawtopiaDMSerifDisplay",
+        [
+            backend_fonts_dir / "DMSerifDisplay-Regular.ttf",
+            windows_fonts / "DMSerifDisplay-Regular.ttf",
+        ],
+    ):
+        _SPECIAL_PAGE_FONT_STATE["display"] = "DrawtopiaDMSerifDisplay"
+
+    _SPECIAL_PAGE_FONT_STATE["initialized"] = True
 
 _BACK_COVER_LOGO_CANDIDATES = [
     Path(__file__).resolve().parent / "assets" / "white-logo.png",
@@ -699,13 +782,17 @@ def _draw_copyright_page_text(
     child_name: str, character_name: str
 ) -> None:
     """Draw copyright page text overlay (same content and style as preview)."""
-    margin_x = width * 0.08
+    _ensure_special_page_fonts()
+    semibold_font = _SPECIAL_PAGE_FONT_STATE["semibold"]
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
+    margin_x = width * 0.11
     max_w = width - 2 * margin_x
     cx = width / 2
-    y = height * 0.78
-    line_height = height * 0.028
+    y = height * 0.64
+    body_size = 16
+    line_height = body_size * 1.34
     c.setFillColor(TEXT_WHITE_92)
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont(semibold_font, body_size)
     paras = [
         f"This one-of-a-kind adventure story was created just for {child_name}.",
         "Beyond these pages lies a magical world filled with wonder, mystery, and brave moments. Every scene unfolds a new chapter in the journey.",
@@ -713,20 +800,22 @@ def _draw_copyright_page_text(
         f"This story celebrates {child_name}'s creativity and courage. Turn the page and begin your adventure into the unknown—where magic awaits.",
     ]
     for p in paras:
-        lines = _wrap_lines(c, p, max_w, "Helvetica-Bold", 12)
+        lines = _wrap_lines(c, p, max_w, semibold_font, body_size)
         for line in lines:
-            w = c.stringWidth(line, "Helvetica-Bold", 12)
+            w = c.stringWidth(line, semibold_font, body_size)
             c.drawString(cx - w / 2, y, line)
             y -= line_height
-        y -= line_height * 0.5
-    y -= line_height * 2
+        y -= line_height * 0.62
+
+    y = height * 0.12
     c.setFillColor(TEXT_WHITE_85)
-    c.setFont("Helvetica", 10)
+    footer_size = 14
+    c.setFont(regular_font, footer_size)
     footer = "© 2026 Drawtopia. All rights reserved.\nPublished by Drawtopia | drawtopia.ai"
     for line in footer.split("\n"):
-        w = c.stringWidth(line, "Helvetica", 10)
+        w = c.stringWidth(line, regular_font, footer_size)
         c.drawString(cx - w / 2, y, line)
-        y -= line_height
+        y -= footer_size * 1.5
 
 
 def _draw_dedication_page_text(
@@ -734,35 +823,38 @@ def _draw_dedication_page_text(
     child_name: str, body: str, signature: str
 ) -> None:
     """Draw dedication page text overlay (same content and style as preview)."""
-    max_w = width * 0.85
+    _ensure_special_page_fonts()
+    medium_font = _SPECIAL_PAGE_FONT_STATE["medium"]
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
+    max_w = width * 0.70
     cx = width / 2
-    y = height * 0.72
-    line_height = height * 0.026
+    y = height * 0.62
+    line_height = height * 0.052
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica", 20)
+    c.setFont(medium_font, 24)
     title = f"Dear {child_name}"
-    w = c.stringWidth(title, "Helvetica", 20)
+    w = c.stringWidth(title, medium_font, 24)
     c.drawString(cx - w / 2, y, title)
-    y -= line_height * 2.5
+    y -= line_height * 1.42
     if body:
-        lines = _wrap_lines(c, body, max_w, "Helvetica", 14)
-        c.setFont("Helvetica", 14)
+        lines = _wrap_lines(c, body, max_w, regular_font, 24)
+        c.setFont(regular_font, 24)
         for line in lines:
-            w = c.stringWidth(line, "Helvetica", 14)
+            w = c.stringWidth(line, regular_font, 24)
             c.drawString(cx - w / 2, y, line)
             y -= line_height
     else:
         default = "In every tiny thing you do each day, never forget that you are loved enormously"
-        lines = _wrap_lines(c, default, max_w, "Helvetica", 14)
-        c.setFont("Helvetica", 14)
+        lines = _wrap_lines(c, default, max_w, regular_font, 24)
+        c.setFont(regular_font, 24)
         for line in lines:
-            w = c.stringWidth(line, "Helvetica", 14)
+            w = c.stringWidth(line, regular_font, 24)
             c.drawString(cx - w / 2, y, line)
             y -= line_height
     if signature:
-        y -= line_height
-        c.setFont("Helvetica", 12)
-        w = c.stringWidth(signature, "Helvetica", 12)
+        y -= line_height * 0.2
+        c.setFont(regular_font, 22)
+        w = c.stringWidth(signature, regular_font, 22)
         c.drawString(cx - w / 2, y, signature)
 
 
@@ -770,27 +862,30 @@ def _draw_last_words_page_text(
     c: canvas.Canvas, width: float, height: float, child_name: str
 ) -> None:
     """Draw last words page text overlay (same content and style as preview)."""
-    max_w = width * 0.88
+    _ensure_special_page_fonts()
+    display_font = _SPECIAL_PAGE_FONT_STATE["display"]
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
+    max_w = width * 0.70
     cx = width / 2
-    y = height * 0.68
-    line_height = height * 0.026
+    y = height * 0.61
+    line_height = height * 0.05
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica-Bold", 20)
+    c.setFont(display_font, 24)
     title = "A Special Thank You"
-    w = c.stringWidth(title, "Helvetica-Bold", 20)
+    w = c.stringWidth(title, display_font, 24)
     c.drawString(cx - w / 2, y, title)
-    y -= line_height * 2
+    y -= line_height * 1.35
     body = f"This magical adventure wouldn't exist without the incredible imagination of {child_name}. Thank you for sharing your creativity with the world!"
-    lines = _wrap_lines(c, body, max_w, "Helvetica", 12)
-    c.setFont("Helvetica", 12)
+    lines = _wrap_lines(c, body, max_w, regular_font, 20)
+    c.setFont(regular_font, 20)
     for line in lines:
-        w = c.stringWidth(line, "Helvetica", 12)
+        w = c.stringWidth(line, regular_font, 20)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
-    y -= line_height
+    y -= line_height * 0.35
     tagline = "Every drawing tells a story. Yours told this one."
-    w = c.stringWidth(tagline, "Helvetica", 11)
-    c.setFont("Helvetica", 11)
+    c.setFont(regular_font, 20)
+    w = c.stringWidth(tagline, regular_font, 20)
     c.drawString(cx - w / 2, y, tagline)
 
 
@@ -798,37 +893,90 @@ def _draw_last_admin_page_text(
     c: canvas.Canvas, width: float, height: float
 ) -> None:
     """Draw last admin page text overlay (same content and style as preview)."""
-    max_w = width * 0.88
+    _ensure_special_page_fonts()
+    bold_font = _SPECIAL_PAGE_FONT_STATE["bold"]
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
+    semibold_font = _SPECIAL_PAGE_FONT_STATE["semibold"]
+    max_w = width * 0.76
     cx = width / 2
-    y = height * 0.72
-    line_height = height * 0.024
+    y = height * 0.60
+    line_height = height * 0.047
+
+    logo_w = width * 0.30
+    logo_h = logo_w * 0.223
+    logo_x = cx - logo_w / 2
+    logo_y = height * 0.885
+    for logo_path in _BACK_COVER_LOGO_CANDIDATES:
+        if logo_path.exists():
+            try:
+                c.drawImage(
+                    ImageReader(str(logo_path)),
+                    logo_x,
+                    logo_y,
+                    width=logo_w,
+                    height=logo_h,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                break
+            except Exception as e:
+                logger.warning(f"Failed to draw last admin logo from {logo_path}: {e}")
+
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica-Bold", 18)
+    c.setFont(bold_font, 31)
     title = "Where Every Child Becomes a Storyteller"
-    lines = _wrap_lines(c, title, max_w, "Helvetica-Bold", 18)
+    lines = _wrap_lines(c, title, max_w, bold_font, 31)
     for line in lines:
-        w = c.stringWidth(line, "Helvetica-Bold", 18)
+        w = c.stringWidth(line, bold_font, 31)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
-    y -= line_height
-    c.setFont("Helvetica", 11)
+
+    y -= line_height * 0.24
+    c.setFont(regular_font, 21)
     tagline = "Their imagination. Their characters. Their stories. Enhanced, not replaced."
-    lines = _wrap_lines(c, tagline, max_w, "Helvetica", 11)
+    lines = _wrap_lines(c, tagline, max_w, regular_font, 21)
     for line in lines:
-        w = c.stringWidth(line, "Helvetica", 11)
-        c.drawString(cx - w / 2, y, line)
+        w = c.stringWidth(line, regular_font, 21)
+        line_x = cx - w / 2
+        c.drawString(line_x, y, line)
+        c.saveState()
+        c.setStrokeColor(TEXT_WHITE_92)
+        c.setLineWidth(1.6)
+        c.line(line_x, y - 2.4, line_x + w, y - 2.4)
+        c.restoreState()
         y -= line_height
-    y -= line_height
+
+    y -= line_height * 0.24
     body = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
-    lines = _wrap_lines(c, body, max_w, "Helvetica", 11)
+    c.setFont(regular_font, 18)
+    lines = _wrap_lines(c, body, max_w, regular_font, 18)
     for line in lines:
-        w = c.stringWidth(line, "Helvetica", 11)
+        w = c.stringWidth(line, regular_font, 18)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
-    y = height * 0.12
-    c.setFont("Helvetica-Bold", 12)
-    w = c.stringWidth("Drawtopia.ai", "Helvetica-Bold", 12)
-    c.drawString(cx - w / 2, y, "Drawtopia.ai")
+
+    button_text = "Drawtopia.ai"
+    button_font_size = 14
+    c.setFont(semibold_font, button_font_size)
+    text_w = c.stringWidth(button_text, semibold_font, button_font_size)
+    button_pad_x = 18
+    button_pad_y = 8
+    button_w = text_w + button_pad_x * 2
+    button_h = button_font_size + button_pad_y * 2
+    button_x = cx - button_w / 2
+    button_y = height * 0.08
+    c.saveState()
+    c.setFillColor(HexColor("#438BFF"))
+    c.setStrokeColor(HexColor("#438BFF"))
+    c.roundRect(button_x, button_y, button_w, button_h, 10, fill=1, stroke=0)
+    c.setFillColor(TEXT_WHITE)
+    text_x = cx - text_w / 2
+    text_y = button_y + button_pad_y + 1
+    c.drawString(text_x, text_y, button_text)
+    c.setStrokeColor(TEXT_WHITE)
+    c.setLineWidth(1.2)
+    c.line(text_x, text_y - 1.5, text_x + text_w, text_y - 1.5)
+    c.restoreState()
 
 
 # ISBN barcode pattern from preview SVG (viewBox 0 0 120 70): black bars as (x, width) in SVG units
@@ -843,6 +991,8 @@ def _draw_back_cover_barcode(
     c: canvas.Canvas, width: float, height: float
 ) -> None:
     """Draw ISBN barcode block at bottom-right of back cover (same as preview)."""
+    _ensure_special_page_fonts()
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
     # Position: bottom-right, matching preview (bottom 1.5rem, right 1.75rem)
     margin_right = width * 0.055
     margin_bottom = height * 0.03
@@ -882,14 +1032,14 @@ def _draw_back_cover_barcode(
     # "ISBN placeholder" above the barcode block (preview: back-cover-isbn)
     isbn_label = "ISBN placeholder"
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica", 10)
-    lw = c.stringWidth(isbn_label, "Helvetica", 10)
+    c.setFont(regular_font, 10.5)
+    lw = c.stringWidth(isbn_label, regular_font, 10.5)
     c.drawString(width - margin_right - lw, bottom + box_h + 4, isbn_label)
     # Age label below barcode
     age_text = "[Age 6-12]"
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica", 10)
-    aw = c.stringWidth(age_text, "Helvetica", 10)
+    c.setFont(regular_font, 10.5)
+    aw = c.stringWidth(age_text, regular_font, 10.5)
     c.drawString(width - margin_right - aw, bottom - 12, age_text)
 
 
@@ -897,12 +1047,17 @@ def _draw_back_cover_text(
     c: canvas.Canvas, width: float, height: float
 ) -> None:
     """Draw back cover text overlay (same content and style as preview)."""
+    _ensure_special_page_fonts()
+    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
+    bold_font = _SPECIAL_PAGE_FONT_STATE["bold"]
+    italic_font = _SPECIAL_PAGE_FONT_STATE["italic"]
+    semibold_font = _SPECIAL_PAGE_FONT_STATE["semibold"]
     cx = width / 2
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
-    y = height * 0.81
+    y = height * 0.79
     title_font_size = 35
-    title_line_gap = height * 0.06
+    title_line_gap = height * 0.062
     stroke_width = max(2.0, title_font_size * 0.13)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
@@ -912,29 +1067,30 @@ def _draw_back_cover_text(
             text=line,
             x_center=cx,
             y=y,
-            font_name="Helvetica-Bold",
+            font_name=bold_font,
             font_size=title_font_size,
             fill_color=TEXT_WHITE,
             stroke_color=title_stroke,
             stroke_width=stroke_width,
         )
         y -= title_line_gap
-    y -= height * 0.01
-    desc_font = 14
-    c.setFont("Helvetica", desc_font)
+
+    y -= height * 0.012
+    desc_font = 16
+    c.setFont(regular_font, desc_font)
     c.setFillColor(TEXT_WHITE)
     desc = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
-    lines = _wrap_lines(c, desc, max_w * 0.92, "Helvetica", desc_font)
-    line_height = desc_font * 1.5
+    lines = _wrap_lines(c, desc, max_w * 0.78, regular_font, desc_font)
+    line_height = desc_font * 1.52
     for line in lines:
-        w = c.stringWidth(line, "Helvetica", desc_font)
+        w = c.stringWidth(line, regular_font, desc_font)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
 
     # Bottom-left block (logo + tagline + website), matching preview placement.
     left_x = width * 0.055
-    bottom_margin = height * 0.03
-    logo_w = width * 0.23
+    bottom_margin = height * 0.035
+    logo_w = width * 0.165
     logo_h = logo_w * 0.223  # Keep source aspect ratio close to white-logo.png
     logo_drawn = False
     for logo_path in _BACK_COVER_LOGO_CANDIDATES:
@@ -943,7 +1099,7 @@ def _draw_back_cover_text(
                 c.drawImage(
                     ImageReader(str(logo_path)),
                     left_x,
-                    bottom_margin + 52,
+                    bottom_margin + 54,
                     width=logo_w,
                     height=logo_h,
                     preserveAspectRatio=True,
@@ -955,11 +1111,11 @@ def _draw_back_cover_text(
                 logger.warning(f"Failed to draw back cover logo from {logo_path}: {e}")
 
     c.setFillColor(TEXT_WHITE_92)
-    c.setFont("Helvetica-Oblique", 10.5)
-    c.drawString(left_x, bottom_margin + 38, "Their imagination. Their characters.")
-    c.drawString(left_x, bottom_margin + 24, "Their stories. Enhanced, not replaced.")
+    c.setFont(italic_font, 10.8)
+    c.drawString(left_x, bottom_margin + 36, "Their imagination. Their characters. Their")
+    c.drawString(left_x, bottom_margin + 22, "stories. Enhanced, not replaced.")
     c.setFillColor(TEXT_WHITE)
-    c.setFont("Helvetica-Bold", 11)
+    c.setFont(semibold_font, 11.5)
     c.drawString(left_x, bottom_margin + 8, "drawtopia.ai")
 
     if not logo_drawn:
