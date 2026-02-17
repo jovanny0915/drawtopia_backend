@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 import requests
-from PIL import Image as PILImage, ImageFilter
+from PIL import Image as PILImage, ImageFilter, ImageDraw
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
@@ -1138,6 +1138,37 @@ def _draw_last_admin_left_blur_layer(c: canvas.Canvas, width: float, height: flo
     )
 
 
+def _draw_center_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
+    """Match preview center blur decoration on copyright and last-words pages."""
+    if width <= 0 or height <= 0:
+        return
+    blur_color = (68 / 255, 120 / 255, 158 / 255)  # #44789E
+    layer_w = width * 1.0
+    layer_h = height * 0.5
+    scale = 2.0
+    page_w_px = max(32, int(round(width * scale)))
+    page_h_px = max(32, int(round(height * scale)))
+    overlay = PILImage.new("RGBA", (page_w_px, page_h_px), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    blur_w_px = max(16, int(round(layer_w * scale)))
+    blur_h_px = max(16, int(round(layer_h * scale)))
+    x0 = int(round((page_w_px - blur_w_px) / 2))
+    y0 = int(round((page_h_px - blur_h_px) / 2))
+    x1 = x0 + blur_w_px
+    y1 = y0 + blur_h_px
+    draw.ellipse(
+        [x0, y0, x1, y1],
+        fill=(
+            int(round(blur_color[0] * 255)),
+            int(round(blur_color[1] * 255)),
+            int(round(blur_color[2] * 255)),
+            168,
+        ),
+    )
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=100))
+    c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
+
+
 # ISBN barcode pattern from preview SVG (viewBox 0 0 120 70): black bars as (x, width) in SVG units
 _BARCODE_BLACK_BARS = [
     (2, 2), (7, 2), (12, 1), (17, 1), (22, 1), (27, 1), (32, 2), (37, 2),
@@ -1357,6 +1388,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, copyright_image_url, width, height, "copyright"):
                 page_count += 1
+            _draw_center_blur_layer(c, width, height)
             _draw_copyright_page_text(c, width, height, child_name, character_name)
             c.showPage()
 
@@ -1412,6 +1444,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, last_word_page_image_url, width, height, "last words"):
                 page_count += 1
+            _draw_center_blur_layer(c, width, height)
             _draw_last_words_page_text(c, width, height, child_name)
             c.showPage()
 
