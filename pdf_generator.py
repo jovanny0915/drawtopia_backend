@@ -651,24 +651,20 @@ def _draw_styled_centered_text_line(
     c.drawString(x, y - max(1.0, font_size * 0.09), text)
     c.restoreState()
 
-    # Manual outline pass for broader compatibility and cleaner look.
-    # Using multiple offset draws avoids reportlab text-render inconsistencies
-    # where thick stroke can overpower the white fill.
+    # Stroke + fill in one text pass for smoother edges.
     c.saveState()
-    c.setFont(font_name, font_size)
-    c.setFillColor(stroke_color)
-    outline = max(1.2, stroke_width * 0.72)
-    outline_offsets = [
-        (-outline, 0.0), (outline, 0.0), (0.0, -outline), (0.0, outline),
-        (-outline * 0.72, -outline * 0.72), (-outline * 0.72, outline * 0.72),
-        (outline * 0.72, -outline * 0.72), (outline * 0.72, outline * 0.72),
-        (-outline * 1.35, 0.0), (outline * 1.35, 0.0), (0.0, -outline * 1.35), (0.0, outline * 1.35),
-    ]
-    for dx, dy in outline_offsets:
-        c.drawString(x + dx, y + dy, text)
+    c.setLineWidth(stroke_width)
+    c.setStrokeColor(stroke_color)
+    c.setFillColor(fill_color)
+    t = c.beginText()
+    t.setTextOrigin(x, y)
+    t.setFont(font_name, font_size)
+    t.setTextRenderMode(2)  # fill + stroke
+    t.textLine(text)
+    c.drawText(t)
     c.restoreState()
 
-    # Bright fill on top (preview has strong white interior)
+    # Reinforce white interior so the title matches preview brightness.
     c.saveState()
     c.setFont(font_name, font_size)
     c.setFillColor(fill_color)
@@ -883,9 +879,9 @@ def _draw_back_cover_text(
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
     y = height * 0.81
-    title_font_size = 35
-    title_line_gap = height * 0.06
-    stroke_width = max(2.0, title_font_size * 0.13)
+    title_font_size = 33
+    title_line_gap = height * 0.058
+    stroke_width = max(1.6, title_font_size * 0.085)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
     for line in title_lines:
