@@ -651,6 +651,26 @@ _BACK_COVER_LOGO_CANDIDATES = [
     Path(__file__).resolve().parents[1] / "drawtopia_frontend" / "src" / "assets" / "white-logo.png",
 ]
 
+_CTA_LINK_ICON_CANDIDATES = [
+    Path(__file__).resolve().parent / "assets" / "Link.svg",
+    Path(__file__).resolve().parents[1] / "drawtopia_frontend" / "src" / "assets" / "Link.svg",
+]
+
+
+def _draw_cta_link_icon(c: canvas.Canvas, x: float, y: float, size: float) -> None:
+    """Draw a compact white link icon for the CTA button."""
+    c.saveState()
+    c.setStrokeColor(TEXT_WHITE)
+    c.setLineWidth(max(1.1, size * 0.105))
+    c.setLineCap(1)
+    # Two linked loops
+    r = size * 0.27
+    c.circle(x + size * 0.38, y + size * 0.62, r, stroke=1, fill=0)
+    c.circle(x + size * 0.62, y + size * 0.38, r, stroke=1, fill=0)
+    # Connector stroke
+    c.line(x + size * 0.45, y + size * 0.55, x + size * 0.55, y + size * 0.45)
+    c.restoreState()
+
 
 def _wrap_lines(c: canvas.Canvas, text: str, max_width: float, font_name: str = "Helvetica", font_size: int = 11) -> List[str]:
     """Wrap text into lines that fit within max_width. Returns list of lines."""
@@ -968,22 +988,29 @@ def _draw_last_admin_page_text(
         y -= line_height
 
     button_text = "Drawtopia.ai"
-    button_font_size = 14
+    button_font_size = 14.5
     c.setFont(semibold_font, button_font_size)
     text_w = c.stringWidth(button_text, semibold_font, button_font_size)
-    button_pad_x = 18
-    button_pad_y = 8
-    button_w = text_w + button_pad_x * 2
+    icon_size = button_font_size + 2
+    icon_gap = 7
+    content_w = icon_size + icon_gap + text_w
+    button_pad_x = 24
+    button_pad_y = 10
+    button_w = content_w + button_pad_x * 2
     button_h = button_font_size + button_pad_y * 2
     button_x = cx - button_w / 2
     button_y = height * 0.08
     c.saveState()
     c.setFillColor(HexColor("#438BFF"))
     c.setStrokeColor(HexColor("#438BFF"))
-    c.roundRect(button_x, button_y, button_w, button_h, 10, fill=1, stroke=0)
+    c.roundRect(button_x, button_y, button_w, button_h, 14, fill=1, stroke=0)
     c.setFillColor(TEXT_WHITE)
-    text_x = cx - text_w / 2
-    text_y = button_y + button_pad_y + 1
+    content_x = button_x + (button_w - content_w) / 2
+    icon_x = content_x
+    icon_y = button_y + (button_h - icon_size) / 2 - 0.2
+    _draw_cta_link_icon(c, icon_x, icon_y, icon_size)
+    text_x = content_x + icon_size + icon_gap
+    text_y = button_y + button_pad_y + 1.15
     c.drawString(text_x, text_y, button_text)
     c.setStrokeColor(TEXT_WHITE)
     c.setLineWidth(1.2)
