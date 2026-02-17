@@ -899,7 +899,6 @@ def _draw_last_admin_page_text(
     semibold_font = _SPECIAL_PAGE_FONT_STATE["semibold"]
     max_w = width * 0.76
     cx = width / 2
-    y = height * 0.60
     line_height = height * 0.047
 
     logo_w = width * 0.30
@@ -923,19 +922,34 @@ def _draw_last_admin_page_text(
                 logger.warning(f"Failed to draw last admin logo from {logo_path}: {e}")
 
     c.setFillColor(TEXT_WHITE)
-    c.setFont(bold_font, 31)
     title = "Where Every Child Becomes a Storyteller"
-    lines = _wrap_lines(c, title, max_w, bold_font, 31)
-    for line in lines:
+    tagline = "Their imagination. Their characters. Their stories. Enhanced, not replaced."
+    body = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
+
+    title_lines = _wrap_lines(c, title, max_w, bold_font, 31)
+    tagline_lines = _wrap_lines(c, tagline, max_w, regular_font, 21)
+    body_lines = _wrap_lines(c, body, max_w, regular_font, 18)
+
+    # Center only the text stack (title + tagline + body) vertically.
+    # The logo and CTA button remain independently positioned.
+    text_block_height = (
+        len(title_lines) * line_height
+        + line_height * 0.24
+        + len(tagline_lines) * line_height
+        + line_height * 0.24
+        + len(body_lines) * line_height
+    )
+    y = (height + text_block_height) / 2
+
+    c.setFont(bold_font, 31)
+    for line in title_lines:
         w = c.stringWidth(line, bold_font, 31)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
 
     y -= line_height * 0.24
     c.setFont(regular_font, 21)
-    tagline = "Their imagination. Their characters. Their stories. Enhanced, not replaced."
-    lines = _wrap_lines(c, tagline, max_w, regular_font, 21)
-    for line in lines:
+    for line in tagline_lines:
         w = c.stringWidth(line, regular_font, 21)
         line_x = cx - w / 2
         c.drawString(line_x, y, line)
@@ -947,10 +961,8 @@ def _draw_last_admin_page_text(
         y -= line_height
 
     y -= line_height * 0.24
-    body = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
     c.setFont(regular_font, 18)
-    lines = _wrap_lines(c, body, max_w, regular_font, 18)
-    for line in lines:
+    for line in body_lines:
         w = c.stringWidth(line, regular_font, 18)
         c.drawString(cx - w / 2, y, line)
         y -= line_height
