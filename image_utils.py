@@ -309,9 +309,9 @@ DO NOT:
             
             prompt = f"""Create a beautiful, colorful children's storybook illustration for this story page.
 
-STORY PAGE TEXT (Page {page_number}):
+STORY PAGE TEXT (Page {page_number}) - FOR SCENE CONTEXT ONLY:
 {story_page_text}
-- Embed this story page text into the image naturally.
+- Do not render, draw, or embed any readable text, letters, words, captions, or typography in the image.
 
 CHARACTER INFORMATION:
 - Character Name: {character_name}
