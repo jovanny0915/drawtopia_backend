@@ -1144,6 +1144,22 @@ def _draw_last_admin_left_blur_layer(c: canvas.Canvas, width: float, height: flo
     )
 
 
+def _draw_right_side_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
+    """Match preview right-side blue gradient blur layer (copyright page)."""
+    blur_color = (68 / 255, 120 / 255, 159 / 255)  # #44789F
+    blur_w = width * 0.50
+    _draw_horizontal_gradient_overlay(
+        c=c,
+        x=width - blur_w,
+        y=0,
+        width=blur_w,
+        height=height,
+        rgb=blur_color,
+        alpha_start=0.0,
+        alpha_end=0.56,
+    )
+
+
 def _draw_center_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
     """Match preview center blur decoration on copyright and last-words pages."""
     if width <= 0 or height <= 0:
@@ -1505,6 +1521,7 @@ def create_book_pdf_with_cover(
             if _draw_full_page_image(c, copyright_image_url, width, height, "copyright"):
                 page_count += 1
             _draw_center_blur_layer(c, width, height)
+            _draw_right_side_blur_layer(c, width, height)
             _draw_copyright_page_text(c, width, height, child_name, character_name)
             c.showPage()
 
@@ -1526,6 +1543,7 @@ def create_book_pdf_with_cover(
                 # Prevent blank white page when dedication image URL is invalid/missing.
                 c.setFillColor(HexColor("#1A3540"))
                 c.rect(0, 0, width, height, fill=1, stroke=0)
+            _draw_last_admin_left_blur_layer(c, width, height)
             _draw_dedication_page_text(c, width, height, child_name, dedication_body or "", dedication_signature or "")
             c.showPage()
             page_count += 1
