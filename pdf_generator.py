@@ -1193,7 +1193,7 @@ def _draw_story_main_text_blur_layer(
     # Use a corner-anchored circle so about 1/4 of the blur appears on page.
     # This matches the requested "1/4 pie" style blur under right-side text.
     x0 = width - (layer_w / 2.0)
-    y0 = height - (layer_h / 2.0) if not is_first_story_page else -(layer_h / 2.0)
+    y0 = height - (layer_h / 2.0) if is_first_story_page else -(layer_h / 2.0)
     x1 = x0 + layer_w
     y1 = y0 + layer_h
     draw.ellipse(
