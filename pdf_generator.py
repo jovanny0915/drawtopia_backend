@@ -1175,8 +1175,8 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
         return
 
     blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
-    layer_w = 1600.0
-    layer_h = 1600.0
+    layer_w = 900.0
+    layer_h = 900.0
 
     # Keep this buffer moderate for speed while preserving smooth blur.
     scale = max(1.0, min(1.8, 1200.0 / max(width, height)))
@@ -1204,7 +1204,7 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
         ),
     )
 
-    blur_radius = max(10, int(round(min(320 * scale, 150))))
+    blur_radius = max(6, int(round(min(140 * scale, 70))))
     overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
@@ -1216,7 +1216,7 @@ def _draw_story_main_page_text(
     text: str,
     is_first_story_page: bool,
 ) -> None:
-    """Draw story text on main story pages (page 1 bottom, pages 2-5 top)."""
+    """Draw story text in right-side area (page 1 bottom-right, pages 2-5 top-right)."""
     clean_text = (text or "").strip()
     if not clean_text:
         return
@@ -1226,7 +1226,11 @@ def _draw_story_main_page_text(
     text_color = HexColor("#FDDAC6")
     font_size = max(10.0, min(16.0, width * 0.026))
     line_height = font_size * 1.25
-    max_width = width * 0.8
+    # Constrain text to a specific right-side box so placement matches preview intent.
+    right_margin = width * 0.04
+    text_box_width = width * 0.56
+    text_box_left = width - right_margin - text_box_width
+    max_width = text_box_width * 0.9
     max_lines = 6
 
     lines = _wrap_lines(c, clean_text, max_width, text_font, int(round(font_size)))
@@ -1237,9 +1241,15 @@ def _draw_story_main_page_text(
     if not lines:
         return
 
-    # Right-anchored overlay in preview still centers text within its own region.
-    x_center = width * 0.52
-    y_start = height * 0.80 if not is_first_story_page else (height * 0.34 + (len(lines) - 1) * line_height)
+    x_center = text_box_left + (text_box_width / 2.0)
+    if is_first_story_page:
+        # Page 1 -> bottom-right area.
+        bottom_padding = height * 0.11
+        y_start = bottom_padding + (len(lines) - 1) * line_height
+    else:
+        # Pages 2-5 -> top-right area.
+        top_padding = height * 0.12
+        y_start = height - top_padding - font_size
 
     c.setFillColor(text_color)
     c.setFont(text_font, font_size)
