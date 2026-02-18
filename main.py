@@ -1382,7 +1382,7 @@ STRICT PROHIBITIONS:
 * DO NOT remove features present in the reference image
 
 ENFORCEMENT:
-The character must be reproduced with pixel-perfect fidelity to the reference image. Any deviation from the reference character's appearance is strictly prohibited. The scene style may vary, but the character's appearance must remain identical to the reference image in all aspects.
+The character must be reproduced with pixel-perfect fidelity to the reference image. Any deviation from the reference character's appearance is strictly prohibited. Do not change or reinterpret the character's art style; the character's appearance and style must remain identical to the reference image in all aspects.
 """
                 negative_prompts = """
 === NEGATIVE PROMPTS (STRICTLY AVOID) ===

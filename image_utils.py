@@ -288,7 +288,10 @@ REQUIRED CHARACTER FEATURES (DO NOT CHANGE):
 * Clothing: Exact same clothing design, colors, patterns, and details as reference
 * Overall design: Exact same character design language, style, and visual identity as reference
 * Anatomy: Exact same anatomical structure - no changes to bone structure, muscle definition, or body type
-* Style: The character's artistic style must remain consistent with the reference image
+* Style: The character's artistic style must remain exactly the same as the reference image
+
+ENFORCEMENT:
+The character must be reproduced with pixel-perfect fidelity to the reference image. Any deviation from the reference character's appearance is strictly prohibited. Do not change or reinterpret the character's art style; the character's appearance and style must remain identical to the reference image in all aspects.
 """
                 negative_prompts = """
 === NEGATIVE PROMPTS (STRICTLY AVOID) ===
