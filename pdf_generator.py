@@ -1175,8 +1175,8 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
         return
 
     blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
-    layer_w = 2400.0
-    layer_h = 2400.0
+    layer_w = 1600.0
+    layer_h = 1600.0
 
     # Keep this buffer moderate for speed while preserving smooth blur.
     scale = max(1.0, min(1.8, 1200.0 / max(width, height)))
@@ -1224,7 +1224,7 @@ def _draw_story_main_page_text(
     _ensure_special_page_fonts()
     text_font = _SPECIAL_PAGE_FONT_STATE["bold"]
     text_color = HexColor("#FDDAC6")
-    font_size = max(22.0, min(36.0, width * 0.058))
+    font_size = max(10.0, min(16.0, width * 0.026))
     line_height = font_size * 1.25
     max_width = width * 0.8
     max_lines = 6
