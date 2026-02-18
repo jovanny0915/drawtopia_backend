@@ -1169,14 +1169,19 @@ def _draw_center_blur_layer(c: canvas.Canvas, width: float, height: float) -> No
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
 
-def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
-    """Add the large blue blur layer used under main story-page text."""
+def _draw_story_main_text_blur_layer(
+    c: canvas.Canvas,
+    width: float,
+    height: float,
+    is_first_story_page: bool,
+) -> None:
+    """Add quarter-style blue blur under story text (bottom-right on page 1, top-right on pages 2-5)."""
     if width <= 0 or height <= 0:
         return
 
     blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
-    layer_w = 500.0
-    layer_h = 500.0
+    layer_w = 420.0
+    layer_h = 420.0
 
     # Keep this buffer moderate for speed while preserving smooth blur.
     scale = max(1.0, min(1.8, 1200.0 / max(width, height)))
@@ -1185,8 +1190,10 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
     overlay = PILImage.new("RGBA", (page_w_px, page_h_px), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    x0 = (width - layer_w) / 2.0
-    y0 = (height - layer_h) / 2.0
+    # Use a corner-anchored circle so about 1/4 of the blur appears on page.
+    # This matches the requested "1/4 pie" style blur under right-side text.
+    x0 = width - (layer_w / 2.0)
+    y0 = height - (layer_h / 2.0) if not is_first_story_page else -(layer_h / 2.0)
     x1 = x0 + layer_w
     y1 = y0 + layer_h
     draw.ellipse(
@@ -1200,11 +1207,11 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
             int(round(blur_color[0] * 255)),
             int(round(blur_color[1] * 255)),
             int(round(blur_color[2] * 255)),
-            72,
+            78,
         ),
     )
 
-    blur_radius = max(4, int(round(min(80 * scale, 35))))
+    blur_radius = max(4, int(round(min(90 * scale, 42))))
     overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
@@ -1530,7 +1537,12 @@ def create_book_pdf_with_cover(
                 page_count += 1
             page_text = story_text_list[i - 1] if i - 1 < len(story_text_list) else ""
             if page_text.strip():
-                _draw_story_main_text_blur_layer(c, width, height)
+                _draw_story_main_text_blur_layer(
+                    c,
+                    width,
+                    height,
+                    is_first_story_page=(i == 1),
+                )
                 _draw_story_main_page_text(
                     c,
                     width,
