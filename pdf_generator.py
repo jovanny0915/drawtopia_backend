@@ -1196,7 +1196,9 @@ def _draw_story_main_text_blur_layer(
     # - Pages 2-5: top-right
     circle_r = layer_w / 2.0
     cx = width * 0.78
-    cy = height * 0.24 if is_first_story_page else height * 0.76
+    # NOTE: This ellipse is drawn on a PIL overlay (top-left origin), not directly on ReportLab.
+    # So larger Y means lower (toward bottom) on the page.
+    cy = height * 0.76 if is_first_story_page else height * 0.24
     # Clamp center so the full circle stays visible even on smaller page sizes.
     cx = min(max(circle_r, cx), max(circle_r, width - circle_r))
     cy = min(max(circle_r, cy), max(circle_r, height - circle_r))
