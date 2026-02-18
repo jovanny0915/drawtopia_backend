@@ -1175,7 +1175,7 @@ def _draw_story_main_text_blur_layer(
     height: float,
     is_first_story_page: bool,
 ) -> None:
-    """Add quarter-style blue blur under story text (bottom-right on page 1, top-right on pages 2-5)."""
+    """Add full-circle blue blur under story text (bottom-right on page 1, top-right on pages 2-5)."""
     if width <= 0 or height <= 0:
         return
 
@@ -1190,10 +1190,18 @@ def _draw_story_main_text_blur_layer(
     overlay = PILImage.new("RGBA", (page_w_px, page_h_px), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Use a corner-anchored circle so about 1/4 of the blur appears on page.
-    # This matches the requested "1/4 pie" style blur under right-side text.
-    x0 = width - (layer_w / 2.0)
-    y0 = height - (layer_h / 2.0) if is_first_story_page else -(layer_h / 2.0)
+    # Keep the full circle fully inside the page (no corner clipping).
+    # Position remains in the same right-side text zones:
+    # - Page 1: bottom-right
+    # - Pages 2-5: top-right
+    circle_r = layer_w / 2.0
+    cx = width * 0.78
+    cy = height * 0.24 if is_first_story_page else height * 0.76
+    # Clamp center so the full circle stays visible even on smaller page sizes.
+    cx = min(max(circle_r, cx), max(circle_r, width - circle_r))
+    cy = min(max(circle_r, cy), max(circle_r, height - circle_r))
+    x0 = cx - circle_r
+    y0 = cy - circle_r
     x1 = x0 + layer_w
     y1 = y0 + layer_h
     draw.ellipse(
