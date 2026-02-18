@@ -1211,7 +1211,7 @@ def _draw_story_main_text_blur_layer(
         ),
     )
 
-    blur_radius = max(4, int(round(min(90 * scale, 42))))
+    blur_radius = max(8, int(round(min(180 * scale, 84))))
     overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
