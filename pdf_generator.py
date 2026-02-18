@@ -1175,8 +1175,8 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
         return
 
     blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
-    layer_w = 900.0
-    layer_h = 900.0
+    layer_w = 500.0
+    layer_h = 500.0
 
     # Keep this buffer moderate for speed while preserving smooth blur.
     scale = max(1.0, min(1.8, 1200.0 / max(width, height)))
@@ -1200,11 +1200,11 @@ def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: flo
             int(round(blur_color[0] * 255)),
             int(round(blur_color[1] * 255)),
             int(round(blur_color[2] * 255)),
-            96,
+            72,
         ),
     )
 
-    blur_radius = max(6, int(round(min(140 * scale, 70))))
+    blur_radius = max(4, int(round(min(80 * scale, 35))))
     overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
