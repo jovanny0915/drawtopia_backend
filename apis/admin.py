@@ -926,8 +926,10 @@ async def update_template(
     supabase = get_supabase_client()
     
     try:
+        provided_fields = getattr(body, "__fields_set__", set())
+
         # Validate story_world if provided
-        if body.story_world is not None:
+        if "story_world" in provided_fields and body.story_world is not None:
             valid_story_worlds = ['forest', 'underwater', 'outerspace']
             # Empty string means clear the story_world
             if body.story_world and body.story_world not in valid_story_worlds:
@@ -938,24 +940,24 @@ async def update_template(
         
         # Build update data from non-None fields
         update_data = {}
-        if body.name is not None:
+        if "name" in provided_fields and body.name is not None:
             update_data["name"] = body.name.strip()
-        if body.story_world is not None:
-            # Convert empty string to None to clear the field
+        if "story_world" in provided_fields:
+            # Empty string or null means clear the field
             update_data["story_world"] = body.story_world if body.story_world else None
-        if body.cover_image is not None:
+        if "cover_image" in provided_fields:
             update_data["cover_image"] = body.cover_image
-        if body.story_page_images is not None:
+        if "story_page_images" in provided_fields:
             update_data["story_page_images"] = body.story_page_images
-        if body.copyright_page_image is not None:
+        if "copyright_page_image" in provided_fields:
             update_data["copyright_page_image"] = body.copyright_page_image
-        if body.dedication_page_image is not None:
+        if "dedication_page_image" in provided_fields:
             update_data["dedication_page_image"] = body.dedication_page_image
-        if body.last_words_page_image is not None:
+        if "last_words_page_image" in provided_fields:
             update_data["last_words_page_image"] = body.last_words_page_image
-        if body.last_story_page_image is not None:
+        if "last_story_page_image" in provided_fields:
             update_data["last_story_page_image"] = body.last_story_page_image
-        if body.back_cover_image is not None:
+        if "back_cover_image" in provided_fields:
             update_data["back_cover_image"] = body.back_cover_image
 
         if not update_data:
