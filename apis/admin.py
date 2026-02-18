@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any, Set
 from rate_limiter import limiter
 from datetime import datetime, timedelta
 from collections import defaultdict
+import random
 import os
 import logging
 from uuid import uuid4
@@ -335,6 +336,49 @@ async def get_templates(request: Request):
     except Exception as e:
         logger.error(f"❌ Error fetching templates: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
+
+
+@router.get("/templates/random")
+@limiter.limit("60/minute")
+async def get_random_template_by_story_world(
+    request: Request,
+    story_world: str = Query(..., description="Story world: forest, underwater, or outerspace")
+):
+    """Get one random template by story world (public endpoint for cover generation)."""
+    supabase = get_supabase_client()
+
+    valid_story_worlds = ["forest", "underwater", "outerspace"]
+    normalized_world = (story_world or "").strip().lower()
+    if normalized_world not in valid_story_worlds:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
+        )
+
+    try:
+        response = (
+            supabase
+            .table("book_templates")
+            .select("*")
+            .eq("story_world", normalized_world)
+            .not_.is_("cover_image", "null")
+            .execute()
+        )
+
+        templates = response.data or []
+        if len(templates) == 0:
+            return {
+                "success": False,
+                "error": f"No templates found for story world: {normalized_world}"
+            }
+
+        return {
+            "success": True,
+            "data": random.choice(templates)
+        }
+    except Exception as e:
+        logger.error(f"❌ Error fetching random template for {normalized_world}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch random template: {str(e)}")
 
 
 @router.get("/admin/users")
