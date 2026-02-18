@@ -189,6 +189,23 @@ async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None
         # Don't raise exception - continue with template deletion even if storage cleanup fails
 
 
+def _delete_urls_or_raise(supabase_client, urls: List[str], context: str) -> None:
+    """Delete storage URLs and raise when any deletion fails."""
+    urls_to_delete = [url for url in urls if isinstance(url, str) and url.strip()]
+    if not urls_to_delete:
+        return
+
+    deletion_stats = delete_files_from_storage(supabase_client, urls_to_delete)
+    if deletion_stats.get("errors", 0) > 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to delete one or more files from storage for {context}. "
+                "Database was not updated."
+            )
+        )
+
+
 def _safe_delete_eq(supabase_client, table_name: str, column: str, value: Any) -> int:
     """Delete rows by equality and return deleted count (best-effort)."""
     try:
@@ -913,6 +930,141 @@ async def upload_story_pages(
     except Exception as e:
         logger.error(f"❌ Error uploading story pages: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload story pages: {str(e)}")
+
+
+@router.delete("/admin/templates/{template_id}/image")
+@limiter.limit("30/minute")
+async def delete_template_image(
+    request: Request,
+    template_id: str,
+    field_key: str = Query(...)
+):
+    """Delete a single template image from storage and clear its DB field."""
+    supabase = get_supabase_client()
+
+    valid_fields = [
+        "cover_image",
+        "copyright_page_image",
+        "dedication_page_image",
+        "back_cover_image",
+        "last_words_page_image",
+        "last_story_page_image",
+    ]
+    if field_key not in valid_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid field_key. Must be one of: {', '.join(valid_fields)}"
+        )
+
+    try:
+        template_response = (
+            supabase
+            .table("book_templates")
+            .select(field_key)
+            .eq("id", template_id)
+            .single()
+            .execute()
+        )
+
+        if not template_response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        existing_url = template_response.data.get(field_key)
+        _delete_urls_or_raise(
+            supabase,
+            [existing_url] if existing_url else [],
+            f"template field '{field_key}'"
+        )
+
+        response = (
+            supabase
+            .table("book_templates")
+            .update({field_key: None})
+            .eq("id", template_id)
+            .execute()
+        )
+
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        logger.info(f"✅ Deleted template image '{field_key}' for template {template_id}")
+        return {
+            "success": True,
+            "data": response.data[0],
+            "deleted_url": existing_url
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting template image '{field_key}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete template image: {str(e)}")
+
+
+@router.delete("/admin/templates/{template_id}/story-page/{page_index}")
+@limiter.limit("30/minute")
+async def delete_story_page_image(
+    request: Request,
+    template_id: str,
+    page_index: int
+):
+    """Delete one story page image from storage and remove it from DB array."""
+    supabase = get_supabase_client()
+
+    if page_index < 0:
+        raise HTTPException(status_code=400, detail="page_index must be >= 0")
+
+    try:
+        template_response = (
+            supabase
+            .table("book_templates")
+            .select("story_page_images")
+            .eq("id", template_id)
+            .single()
+            .execute()
+        )
+
+        if not template_response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        story_page_images = template_response.data.get("story_page_images") or []
+        if not isinstance(story_page_images, list):
+            story_page_images = []
+
+        if page_index >= len(story_page_images):
+            raise HTTPException(status_code=400, detail="Invalid story page index")
+
+        removed_url = story_page_images[page_index]
+        _delete_urls_or_raise(
+            supabase,
+            [removed_url] if removed_url else [],
+            f"story page index {page_index}"
+        )
+
+        next_story_page_images = [url for idx, url in enumerate(story_page_images) if idx != page_index]
+        response = (
+            supabase
+            .table("book_templates")
+            .update({"story_page_images": next_story_page_images})
+            .eq("id", template_id)
+            .execute()
+        )
+
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        logger.info(f"✅ Deleted story page {page_index + 1} for template {template_id}")
+        return {
+            "success": True,
+            "data": response.data[0],
+            "deleted_url": removed_url
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting story page {page_index} for template {template_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete story page image: {str(e)}")
 
 
 @router.patch("/admin/templates/{template_id}")
