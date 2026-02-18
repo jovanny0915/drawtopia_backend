@@ -1022,6 +1022,12 @@ def _draw_last_admin_page_text(
     c.setLineWidth(1.2)
     c.line(text_x, text_y - 1.5, text_x + text_w, text_y - 1.5)
     c.restoreState()
+    c.linkURL(
+        "https://app.drawtopia.ai",
+        (button_x, button_y, button_x + button_w, button_y + button_h),
+        relative=0,
+        thickness=0,
+    )
 
 
 def _draw_vertical_gradient_overlay(
