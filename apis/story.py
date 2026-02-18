@@ -1421,6 +1421,8 @@ async def generate_book_pdf(request: Request, book_id: str):
         )
         dedication_text = story.get("dedication_text") or ""
         character_name = story.get("character_name") or "[CHARACTER_NAME]"
+        story_content = story.get("story_content")
+        story_page_texts = []
         
         # Resolve child first name for copyright/dedication/last-words text (same as preview)
         copyright_child_name = "[CHILD_NAME]"
@@ -1446,6 +1448,33 @@ async def generate_book_pdf(request: Request, book_id: str):
                 dedication_signature = f"— {sig}" if sig else ""
             else:
                 dedication_body = dedication_raw
+
+        # Parse story page text list for PDF overlay (match /preview/default page text source)
+        try:
+            parsed_content = story_content
+            if isinstance(parsed_content, str) and parsed_content.strip():
+                parsed_content = json.loads(parsed_content)
+
+            content_pages = []
+            if isinstance(parsed_content, list):
+                content_pages = parsed_content
+            elif isinstance(parsed_content, dict):
+                pages_value = parsed_content.get("pages")
+                if isinstance(pages_value, list):
+                    content_pages = pages_value
+            elif isinstance(parsed_content, str) and parsed_content.strip():
+                content_pages = [{"text": parsed_content.strip()}]
+
+            for page in content_pages[:5]:
+                if isinstance(page, dict):
+                    text_value = (page.get("text") or "").strip()
+                elif isinstance(page, str):
+                    text_value = page.strip()
+                else:
+                    text_value = ""
+                story_page_texts.append(text_value)
+        except Exception as e:
+            main.logger.warning(f"Could not parse story_content for PDF story text overlay: {e}")
         
         # Check if we have at least cover or scene images (or other page images)
         has_cover = bool(story_cover)
@@ -1477,6 +1506,7 @@ async def generate_book_pdf(request: Request, book_id: str):
             copyright_character_name=character_name,
             dedication_body=dedication_body,
             dedication_signature=dedication_signature,
+            story_page_texts=story_page_texts,
         )
         
         if not success:

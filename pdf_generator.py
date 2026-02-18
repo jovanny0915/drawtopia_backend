@@ -1169,6 +1169,87 @@ def _draw_center_blur_layer(c: canvas.Canvas, width: float, height: float) -> No
     c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
 
 
+def _draw_story_main_text_blur_layer(c: canvas.Canvas, width: float, height: float) -> None:
+    """Add the large blue blur layer used under main story-page text."""
+    if width <= 0 or height <= 0:
+        return
+
+    blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
+    layer_w = 3500.0
+    layer_h = 3500.0
+
+    # Keep this buffer moderate for speed while preserving smooth blur.
+    scale = max(1.0, min(1.8, 1200.0 / max(width, height)))
+    page_w_px = max(64, int(round(width * scale)))
+    page_h_px = max(64, int(round(height * scale)))
+    overlay = PILImage.new("RGBA", (page_w_px, page_h_px), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    x0 = (width - layer_w) / 2.0
+    y0 = (height - layer_h) / 2.0
+    x1 = x0 + layer_w
+    y1 = y0 + layer_h
+    draw.ellipse(
+        [
+            int(round(x0 * scale)),
+            int(round(y0 * scale)),
+            int(round(x1 * scale)),
+            int(round(y1 * scale)),
+        ],
+        fill=(
+            int(round(blur_color[0] * 255)),
+            int(round(blur_color[1] * 255)),
+            int(round(blur_color[2] * 255)),
+            118,
+        ),
+    )
+
+    blur_radius = max(12, int(round(min(500 * scale, 220))))
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    c.drawImage(ImageReader(overlay), 0, 0, width=width, height=height, mask="auto")
+
+
+def _draw_story_main_page_text(
+    c: canvas.Canvas,
+    width: float,
+    height: float,
+    text: str,
+    is_first_story_page: bool,
+) -> None:
+    """Draw story text on main story pages (page 1 bottom, pages 2-5 top)."""
+    clean_text = (text or "").strip()
+    if not clean_text:
+        return
+
+    _ensure_special_page_fonts()
+    text_font = _SPECIAL_PAGE_FONT_STATE["bold"]
+    text_color = HexColor("#FDDAC6")
+    font_size = max(26.0, min(44.0, width * 0.072))
+    line_height = font_size * 1.25
+    max_width = width * 0.86
+    max_lines = 6
+
+    lines = _wrap_lines(c, clean_text, max_width, text_font, int(round(font_size)))
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if lines:
+            lines[-1] = lines[-1].rstrip() + "..."
+    if not lines:
+        return
+
+    # Right-anchored overlay in preview still centers text within its own region.
+    x_center = width * 0.52
+    y_start = height * 0.80 if not is_first_story_page else (height * 0.34 + (len(lines) - 1) * line_height)
+
+    c.setFillColor(text_color)
+    c.setFont(text_font, font_size)
+    y = y_start
+    for line in lines:
+        w = c.stringWidth(line, text_font, font_size)
+        c.drawString(x_center - w / 2, y, line)
+        y -= line_height
+
+
 # ISBN barcode pattern from preview SVG (viewBox 0 0 120 70): black bars as (x, width) in SVG units
 _BARCODE_BLACK_BARS = [
     (2, 2), (7, 2), (12, 1), (17, 1), (22, 1), (27, 1), (32, 2), (37, 2),
@@ -1351,6 +1432,7 @@ def create_book_pdf_with_cover(
     copyright_character_name: Optional[str] = None,
     dedication_body: Optional[str] = None,
     dedication_signature: Optional[str] = None,
+    story_page_texts: Optional[List[str]] = None,
 ) -> bool:
     """
     Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
@@ -1371,6 +1453,7 @@ def create_book_pdf_with_cover(
         c = canvas.Canvas(output_buffer, pagesize=A4)
         width, height = A4
         page_count = 0
+        story_text_list = story_page_texts or []
 
         # 1. Cover (one image = one full page, image covers whole page)
         if story_cover_url:
@@ -1435,6 +1518,16 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_image_cover_page(c, right_half, width, height):
                 page_count += 1
+            page_text = story_text_list[i - 1] if i - 1 < len(story_text_list) else ""
+            if page_text.strip():
+                _draw_story_main_text_blur_layer(c, width, height)
+                _draw_story_main_page_text(
+                    c,
+                    width,
+                    height,
+                    page_text,
+                    is_first_story_page=(i == 1),
+                )
             c.showPage()
 
         # 5. Last words page (image + text overlay, same style as preview)
