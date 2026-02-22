@@ -842,39 +842,43 @@ def _draw_dedication_page_text(
     c: canvas.Canvas, width: float, height: float,
     child_name: str, body: str, signature: str
 ) -> None:
-    """Draw dedication page text overlay (same content and style as preview)."""
+    """Draw dedication page text overlay (same content and style as preview).
+    Font style: Quicksand SemiBold (600), 64px equiv (48pt), line-height 110%, center, #FFFFFF.
+    """
     _ensure_special_page_fonts()
-    medium_font = _SPECIAL_PAGE_FONT_STATE["medium"]
-    regular_font = _SPECIAL_PAGE_FONT_STATE["regular"]
-    max_w = width * 0.70
+    semibold_font = _SPECIAL_PAGE_FONT_STATE["semibold"]
+    # Match preview dedication "Main Text": Quicksand 600, 64px, line-height 110%, center, #FFFFFF
+    font_size_main = 48   # 64px at 96dpi ≈ 48pt
+    line_height_main = font_size_main * 1.10  # 110%
+    max_w = width * 0.6  # Narrower text area for dedication
     cx = width / 2
     y = height * 0.62
-    line_height = height * 0.052
     c.setFillColor(TEXT_WHITE)
-    c.setFont(medium_font, 24)
+    c.setFont(semibold_font, font_size_main)
     title = f"Dear {child_name}"
-    w = c.stringWidth(title, medium_font, 24)
+    w = c.stringWidth(title, semibold_font, font_size_main)
     c.drawString(cx - w / 2, y, title)
-    y -= line_height * 1.42
+    y -= line_height_main * 1.42
     if body:
-        lines = _wrap_lines(c, body, max_w, regular_font, 24)
-        c.setFont(regular_font, 24)
+        lines = _wrap_lines(c, body, max_w, semibold_font, font_size_main)
+        c.setFont(semibold_font, font_size_main)
         for line in lines:
-            w = c.stringWidth(line, regular_font, 24)
+            w = c.stringWidth(line, semibold_font, font_size_main)
             c.drawString(cx - w / 2, y, line)
-            y -= line_height
+            y -= line_height_main
     else:
         default = "In every tiny thing you do each day, never forget that you are loved enormously"
-        lines = _wrap_lines(c, default, max_w, regular_font, 24)
-        c.setFont(regular_font, 24)
+        lines = _wrap_lines(c, default, max_w, semibold_font, font_size_main)
+        c.setFont(semibold_font, font_size_main)
         for line in lines:
-            w = c.stringWidth(line, regular_font, 24)
+            w = c.stringWidth(line, semibold_font, font_size_main)
             c.drawString(cx - w / 2, y, line)
-            y -= line_height
+            y -= line_height_main
     if signature:
-        y -= line_height * 0.2
-        c.setFont(regular_font, 22)
-        w = c.stringWidth(signature, regular_font, 22)
+        y -= line_height_main * 0.2
+        font_size_sig = 40  # Slightly smaller, same Quicksand SemiBold
+        c.setFont(semibold_font, font_size_sig)
+        w = c.stringWidth(signature, semibold_font, font_size_sig)
         c.drawString(cx - w / 2, y, signature)
 
 

@@ -76,6 +76,11 @@ ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 # Production mode check
 IS_PRODUCTION = os.getenv("ENVIRONMENT", "development") == "production"
 
+# Twilio Verify (passwordless SMS)
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_VERIFY_SERVICE_SID = os.getenv("TWILIO_VERIFY_SERVICE_SID", "")
+
 # Stripe Configuration
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
@@ -121,6 +126,18 @@ if SUPABASE_URL:
         logger.warning("⚠️ No Supabase key found (SUPABASE_ANON_KEY or SUPABASE_SERVICE_KEY)")
 else:
     logger.warning("⚠️ Supabase URL not found. Storage upload will be disabled.")
+
+# Twilio Verify client (passwordless SMS)
+twilio_verify_client = None
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID:
+    try:
+        from twilio.rest import Client as TwilioClient
+        twilio_verify_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        logger.info("✅ Twilio Verify client initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Twilio Verify not available: {e}")
+else:
+    logger.warning("⚠️ Twilio Verify not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID)")
 
 # Google Cloud Vision API (uses existing Google Cloud credentials via GOOGLE_APPLICATION_CREDENTIALS)
 from services.vision_character_features import get_vision_client, extract_character_features, VisionNotConfiguredError, VisionAPIError
@@ -1479,6 +1496,7 @@ def create_jwt_token(user_id: str, additional_claims: Optional[Dict] = None) -> 
     """
     payload = {
         "user_id": user_id,
+        "sub": user_id,  # Standard claim for compatibility (e.g. extract_user_from_token)
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
         "iat": datetime.utcnow()
     }
@@ -3452,6 +3470,169 @@ class AuthSyncRequest(BaseModel):
     user_id: str
     email: str
     name: Optional[str] = None
+
+
+# --- Passwordless auth (Twilio Verify) ---
+class RequestOtpRequest(BaseModel):
+    phone: str  # E.164 format, e.g. +15551234567
+
+
+class VerifyOtpRequest(BaseModel):
+    phone: str
+    code: str  # 4–10 digit verification code
+
+
+@app.post("/api/auth/request-otp")
+@limiter.limit("6/minute")  # Prevent SMS abuse
+async def auth_request_otp(request: Request, body: RequestOtpRequest):
+    """
+    Send SMS verification code via Twilio Verify.
+    Used for passwordless phone login/signup.
+    """
+    if not twilio_verify_client:
+        raise HTTPException(
+            status_code=503,
+            detail="SMS verification is not configured. Please contact support."
+        )
+    phone = (body.phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required")
+    # Normalize to E.164: ensure leading +
+    if not phone.startswith("+"):
+        phone = "+" + re.sub(r"\D", "", phone)
+    if not re.match(r"^\+\d{10,15}$", phone):
+        raise HTTPException(status_code=400, detail="Invalid phone number format")
+    try:
+        verification = twilio_verify_client.verify.v2.services(
+            TWILIO_VERIFY_SERVICE_SID
+        ).verifications.create(to=phone, channel="sms")
+        return {"success": True, "message": "Verification code sent"}
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "rate" in err_msg or "limit" in err_msg:
+            raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
+        if "invalid" in err_msg or "unverified" in err_msg:
+            raise HTTPException(status_code=400, detail="This phone number cannot receive SMS.")
+        logger.exception("Twilio Verify send failed")
+        raise HTTPException(status_code=500, detail="Failed to send verification code.")
+
+
+@app.post("/api/auth/verify-otp")
+@limiter.limit("10/minute")
+async def auth_verify_otp(request: Request, body: VerifyOtpRequest):
+    """
+    Verify SMS code with Twilio, then get-or-create user and return JWT.
+    Passwordless login/signup: new users are created automatically.
+    """
+    if not twilio_verify_client or not supabase:
+        raise HTTPException(
+            status_code=503,
+            detail="Verification or database is not available."
+        )
+    phone = (body.phone or "").strip()
+    if not phone.startswith("+"):
+        phone = "+" + re.sub(r"\D", "", phone)
+    if not re.match(r"^\+\d{10,15}$", phone):
+        raise HTTPException(status_code=400, detail="Invalid phone number format")
+    code = (body.code or "").strip()
+    if not code or not code.isdigit():
+        raise HTTPException(status_code=400, detail="Verification code is required")
+    try:
+        check = twilio_verify_client.verify.v2.services(
+            TWILIO_VERIFY_SERVICE_SID
+        ).verification_checks.create(to=phone, code=code)
+        if check.status != "approved":
+            raise HTTPException(status_code=400, detail="Invalid or expired code.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "invalid" in err_msg or "expired" in err_msg or "404" in err_msg:
+            raise HTTPException(status_code=400, detail="Invalid or expired code.")
+        logger.exception("Twilio Verify check failed")
+        raise HTTPException(status_code=500, detail="Verification failed.")
+    # Get or create user in our users table (phone-only, no Supabase Auth user)
+    try:
+        existing = supabase.table("users").select("id, first_name, last_name, email, phone, role").eq("phone", phone).execute()
+        if existing.data and len(existing.data) > 0:
+            row = existing.data[0]
+            user_id = row["id"]
+            is_new = False
+        else:
+            user_id = str(uuid.uuid4())
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            supabase.table("users").insert({
+                "id": user_id,
+                "phone": phone,
+                "role": "adult",
+                "last_login": today,
+                "upload_cnt": 10,
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }).execute()
+            is_new = True
+            row = {"id": user_id, "first_name": None, "last_name": None, "email": None, "phone": phone, "role": "adult"}
+    except Exception as e:
+        logger.exception("Get/create user failed: %s", e)
+        raise HTTPException(status_code=500, detail="Could not sign you in.")
+    # Update last_login for existing users
+    if not is_new:
+        try:
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            supabase.table("users").update({
+                "last_login": today,
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", user_id).execute()
+        except Exception:
+            pass
+    access_token = create_jwt_token(user_id)
+    return {
+        "success": True,
+        "access_token": access_token,
+        "user": {
+            "id": row.get("id"),
+            "email": row.get("email"),
+            "phone": row.get("phone"),
+            "first_name": row.get("first_name"),
+            "last_name": row.get("last_name"),
+            "role": row.get("role", "adult"),
+        },
+        "is_new_user": is_new,
+    }
+
+
+@app.get("/api/auth/me")
+@limiter.limit("60/minute")
+async def auth_me(request: Request, authorization: Optional[str] = Header(None)):
+    """
+    Return current user profile for the given JWT (e.g. passwordless phone session).
+    """
+    user_id = extract_user_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Database not available")
+    try:
+        result = supabase.table("users").select("id, email, phone, first_name, last_name, role").eq("id", user_id).execute()
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+        row = result.data[0]
+        return {
+            "success": True,
+            "user": {
+                "id": row.get("id"),
+                "email": row.get("email"),
+                "phone": row.get("phone"),
+                "first_name": row.get("first_name"),
+                "last_name": row.get("last_name"),
+                "role": row.get("role", "adult"),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Auth me failed: %s", e)
+        raise HTTPException(status_code=500, detail="Could not load profile.")
 
 
 @app.post("/api/gift/deliver")
