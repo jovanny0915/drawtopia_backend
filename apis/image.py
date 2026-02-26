@@ -134,9 +134,11 @@ async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRe
 @limiter.limit("20/minute")
 async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitleRequest):
     """
-    Overlay selected title text on an already-generated cover image using PIL only (no AI).
+    Overlay title text on an existing cover image.
     """
     import main
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+
     try:
         image_url_str = str(body.image_url)
         title_text = (body.title or "").strip()
@@ -146,11 +148,18 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         main.logger.info(f"Downloading cover image for title overlay from: {image_url_str}")
         image_data = main.download_image_from_url(image_url_str)
 
-        with_title = main.overlay_cover_title_with_reference_style(
-            image_data=image_data,
-            title_text=title_text,
-            y_position=float(body.y_position or 0.14),
-        )
+        image = PILImage.open(BytesIO(image_data)).convert("RGB")
+        width, height = image.size
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+
+        y = int(height * float(body.y_position or 0.14))
+        x = int(width * 0.08)
+        draw.text((x, y), title_text, fill=(0, 0, 0), font=font)
+
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=90, optimize=True)
+        with_title = out.getvalue()
         optimized = main.optimize_image_to_jpg(with_title)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
