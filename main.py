@@ -693,7 +693,8 @@ def overlay_title_on_cover(
     shadow_color = (15, 10, 59)
     shadow_offset_y = max(2, height // 100)
 
-    font_size = min(400, max(48, height // 4))
+    # Very large title: use ~38% of image height (was 25%), cap 500px
+    font_size = min(500, max(64, int(height / 2.6)))
     font = _get_font_for_size(font_size)
     lines = _wrap_text_to_width(draw, title.strip(), font, title_box_width)
     while not lines:
