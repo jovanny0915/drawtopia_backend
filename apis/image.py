@@ -151,7 +151,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         image = PILImage.open(BytesIO(image_data)).convert("RGB")
         width, height = image.size
         draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
+        font = ImageFont.load_default(500)
 
         y = int(height * float(body.y_position or 0.14))
         x = int(width * 0.08)
