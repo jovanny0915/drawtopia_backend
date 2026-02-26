@@ -137,7 +137,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
     Overlay title text on an existing cover image.
     """
     import main
-    from PIL import Image as PILImage, ImageDraw, ImageFont
+    from PIL import Image as PILImage, ImageDraw, ImageFont, ImageFilter
 
     try:
         image_url_str = str(body.image_url)
@@ -210,50 +210,63 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 
         fill_color = "#F3E5CB"
         stroke_color = "#1C596F"
-        glow_color = "#4A9FC0"
-        drop_shadow_color = "#1C1453"
         stroke_width = max(2, int(min(width, height) * 0.008))
-        glow_spread = max(3, int(min(width, height) * 0.012))
+
+        # CSS-like text-shadow:
+        # 1) 0 0 100px #F3E5CB -> blurred glow layer
+        # 2) 0 15px 0 rgba(15, 10, 59, 0.5) -> vertical hard shadow
+        glow_color_rgba = (243, 229, 203, 170)
+        drop_shadow_color_rgba = (15, 10, 59, 128)
+        glow_blur_radius = max(8, int(min(width, height) * 0.03))
         drop_shadow_offset_y = max(3, int(min(width, height) * 0.012))
 
+        text_layout = []
         current_y = y
         for line in lines:
             line_w = text_width(line)
             line_x = max(0, int((width - line_w) / 2))
+            text_layout.append((line, line_x, current_y))
+            current_y += line_height + line_spacing
 
-            # Soft outer glow around the whole glyph shape (no cream ghost copies).
-            draw.text(
-                (line_x, current_y),
-                line,
-                fill=glow_color,
-                font=font,
-                stroke_width=stroke_width + glow_spread,
-                stroke_fill=glow_color,
-            )
+        image = image.convert("RGBA")
+        glow_layer = PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
+        shadow_layer = PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow_layer)
+        shadow_draw = ImageDraw.Draw(shadow_layer)
 
-            # Drop shadow similar to CSS vertical shadow.
-            draw.text(
-                (line_x, current_y + drop_shadow_offset_y),
+        for line, line_x, line_y in text_layout:
+            glow_draw.text(
+                (line_x, line_y),
                 line,
-                fill=drop_shadow_color,
+                fill=glow_color_rgba,
                 font=font,
                 stroke_width=stroke_width,
-                stroke_fill=drop_shadow_color,
+                stroke_fill=glow_color_rgba,
+            )
+            shadow_draw.text(
+                (line_x, line_y + drop_shadow_offset_y),
+                line,
+                fill=drop_shadow_color_rgba,
+                font=font,
             )
 
-            # Main title text with stroke.
-            draw.text(
-                (line_x, current_y),
+        glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_blur_radius))
+        image = PILImage.alpha_composite(image, glow_layer)
+        image = PILImage.alpha_composite(image, shadow_layer)
+
+        main_draw = ImageDraw.Draw(image)
+        for line, line_x, line_y in text_layout:
+            main_draw.text(
+                (line_x, line_y),
                 line,
                 fill=fill_color,
                 font=font,
                 stroke_width=stroke_width,
                 stroke_fill=stroke_color,
             )
-            current_y += line_height + line_spacing
 
         out = BytesIO()
-        image.save(out, format="JPEG", quality=90, optimize=True)
+        image.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
         with_title = out.getvalue()
         optimized = main.optimize_image_to_jpg(with_title)
 
