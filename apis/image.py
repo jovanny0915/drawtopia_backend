@@ -137,7 +137,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
     Overlay title text on an existing cover image.
     """
     import main
-    from PIL import Image as PILImage, ImageDraw, ImageFont, ImageColor
+    from PIL import Image as PILImage, ImageDraw, ImageFont
 
     try:
         image_url_str = str(body.image_url)
@@ -210,10 +210,10 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 
         fill_color = "#F3E5CB"
         stroke_color = "#1C596F"
-        glow_color = "#F3E5CB"
-        drop_shadow_color = (15, 10, 59, 128)
+        glow_color = "#4A9FC0"
+        drop_shadow_color = "#1C1453"
         stroke_width = max(2, int(min(width, height) * 0.008))
-        glow_radius = max(4, int(min(width, height) * 0.02))
+        glow_spread = max(3, int(min(width, height) * 0.012))
         drop_shadow_offset_y = max(3, int(min(width, height) * 0.012))
 
         current_y = y
@@ -221,26 +221,15 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             line_w = text_width(line)
             line_x = max(0, int((width - line_w) / 2))
 
-            # Soft glow: draw multiple low-opacity copies around text.
-            for step in range(glow_radius, 0, -2):
-                alpha = max(12, int(90 * (step / max(glow_radius, 1))))
-                glow_fill = (*ImageColor.getrgb(glow_color), alpha)
-                for dx, dy in (
-                    (step, 0),
-                    (-step, 0),
-                    (0, step),
-                    (0, -step),
-                    (step, step),
-                    (-step, step),
-                    (step, -step),
-                    (-step, -step),
-                ):
-                    draw.text(
-                        (line_x + dx, current_y + dy),
-                        line,
-                        fill=glow_fill,
-                        font=font,
-                    )
+            # Soft outer glow around the whole glyph shape (no cream ghost copies).
+            draw.text(
+                (line_x, current_y),
+                line,
+                fill=glow_color,
+                font=font,
+                stroke_width=stroke_width + glow_spread,
+                stroke_fill=glow_color,
+            )
 
             # Drop shadow similar to CSS vertical shadow.
             draw.text(
