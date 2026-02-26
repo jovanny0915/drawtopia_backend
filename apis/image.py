@@ -116,7 +116,12 @@ async def overlay_title_on_cover_endpoint(request: Request, body: OverlayTitleOn
             raise HTTPException(status_code=400, detail="Title is required")
         main.logger.info(f"Overlaying title on cover: {image_url_str[:80]}...")
         image_data = main.download_image_from_url(image_url_str)
-        result_bytes = main.overlay_title_on_cover(image_data, title, title_box_width_ratio=0.7)
+        result_bytes = main.overlay_title_on_cover(
+            image_data,
+            title,
+            title_box_width_ratio=1.0,
+            y_position_ratio=0.5,
+        )
         optimized = main.optimize_image_to_jpg(result_bytes)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
