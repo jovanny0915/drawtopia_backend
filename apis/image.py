@@ -255,15 +255,31 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         image = PILImage.alpha_composite(image, shadow_layer)
 
         main_draw = ImageDraw.Draw(image)
+        inner_bold_radius = max(1, min(2, int(min(width, height) * 0.0018)))
+        inner_bold_offsets = [
+            (dx, dy)
+            for dx in range(-inner_bold_radius, inner_bold_radius + 1)
+            for dy in range(-inner_bold_radius, inner_bold_radius + 1)
+            if (dx * dx + dy * dy) <= (inner_bold_radius * inner_bold_radius)
+        ]
         for line, line_x, line_y in text_layout:
+            # Draw stroke as a solid outline layer first.
             main_draw.text(
                 (line_x, line_y),
                 line,
-                fill=fill_color,
+                fill=stroke_color,
                 font=font,
                 stroke_width=stroke_width,
                 stroke_fill=stroke_color,
             )
+            # Then render fill multiple times with tiny offsets to make inner text thicker.
+            for dx, dy in inner_bold_offsets:
+                main_draw.text(
+                    (line_x + dx, line_y + dy),
+                    line,
+                    fill=fill_color,
+                    font=font,
+                )
 
         out = BytesIO()
         image.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
