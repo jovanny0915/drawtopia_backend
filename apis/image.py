@@ -79,6 +79,51 @@ class OverlayBackCoverResponse(BaseModel):
     message: str
 
 
+class UploadCoverImageRequest(BaseModel):
+    """Base64-encoded image (JPEG/PNG). May include data URL prefix."""
+    image_base64: str
+
+
+class UploadCoverImageResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
+@router.post("/upload-cover-image/")
+@limiter.limit("20/minute")
+async def upload_cover_image_endpoint(request: Request, body: UploadCoverImageRequest):
+    """
+    Decode base64 image, upload to storage, return public URL.
+    Used after client-side compositing (e.g. title overlay on cover).
+    """
+    import main
+    try:
+        raw = body.image_base64.strip()
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[-1]
+        image_data = base64.b64decode(raw)
+        if not image_data:
+            raise HTTPException(status_code=400, detail="Invalid or empty image data")
+        optimized = main.optimize_image_to_jpg(image_data)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return UploadCoverImageResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
+                message="Cover image uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload cover image to storage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in upload_cover_image_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/overlay-back-cover/")
 @limiter.limit("20/minute")
 async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRequest):
