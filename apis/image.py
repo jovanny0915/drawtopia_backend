@@ -137,7 +137,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
     Overlay title text on an existing cover image.
     """
     import main
-    from PIL import Image as PILImage, ImageDraw, ImageFont
+    from PIL import Image as PILImage, ImageDraw, ImageFont, ImageColor
 
     try:
         image_url_str = str(body.image_url)
@@ -208,11 +208,59 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         max_y = max(0, height - total_text_height - int(height * 0.02))
         y = min(max(desired_y, 0), max_y)
 
+        fill_color = "#F3E5CB"
+        stroke_color = "#1C596F"
+        glow_color = "#F3E5CB"
+        drop_shadow_color = (15, 10, 59, 128)
+        stroke_width = max(2, int(min(width, height) * 0.008))
+        glow_radius = max(4, int(min(width, height) * 0.02))
+        drop_shadow_offset_y = max(3, int(min(width, height) * 0.012))
+
         current_y = y
         for line in lines:
             line_w = text_width(line)
             line_x = max(0, int((width - line_w) / 2))
-            draw.text((line_x, current_y), line, fill=(0, 0, 0), font=font)
+
+            # Soft glow: draw multiple low-opacity copies around text.
+            for step in range(glow_radius, 0, -2):
+                alpha = max(12, int(90 * (step / max(glow_radius, 1))))
+                glow_fill = (*ImageColor.getrgb(glow_color), alpha)
+                for dx, dy in (
+                    (step, 0),
+                    (-step, 0),
+                    (0, step),
+                    (0, -step),
+                    (step, step),
+                    (-step, step),
+                    (step, -step),
+                    (-step, -step),
+                ):
+                    draw.text(
+                        (line_x + dx, current_y + dy),
+                        line,
+                        fill=glow_fill,
+                        font=font,
+                    )
+
+            # Drop shadow similar to CSS vertical shadow.
+            draw.text(
+                (line_x, current_y + drop_shadow_offset_y),
+                line,
+                fill=drop_shadow_color,
+                font=font,
+                stroke_width=stroke_width,
+                stroke_fill=drop_shadow_color,
+            )
+
+            # Main title text with stroke.
+            draw.text(
+                (line_x, current_y),
+                line,
+                fill=fill_color,
+                font=font,
+                stroke_width=stroke_width,
+                stroke_fill=stroke_color,
+            )
             current_y += line_height + line_spacing
 
         out = BytesIO()
