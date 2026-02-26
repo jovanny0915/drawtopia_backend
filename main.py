@@ -614,7 +614,7 @@ def overlay_cover_title_with_reference_style(
         lines = [title]
 
     # Title font size is fixed by product requirement.
-    font_size = 500
+    font_size = 800
 
     font = _get_cover_title_font(font_size)
 
