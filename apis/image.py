@@ -151,11 +151,67 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         image = PILImage.open(BytesIO(image_data)).convert("RGB")
         width, height = image.size
         draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default(height/7)
+        font = ImageFont.load_default(height/10)
 
-        y = int(height * float(body.y_position or 0.14))
         x = int(width * 0.08)
-        draw.text((x, y), title_text, fill=(0, 0, 0), font=font)
+        max_text_width = int(width * 0.84)  # Keep side margins so text never exceeds cover width
+
+        def text_width(text: str) -> int:
+            if not text:
+                return 0
+            bbox = draw.textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0]
+
+        # Wrap title into multiple lines constrained by the available width.
+        lines = []
+        for paragraph in title_text.splitlines() or [title_text]:
+            words = paragraph.split()
+            if not words:
+                continue
+
+            current_line = ""
+            for word in words:
+                candidate = word if not current_line else f"{current_line} {word}"
+                if text_width(candidate) <= max_text_width:
+                    current_line = candidate
+                    continue
+
+                if current_line:
+                    lines.append(current_line)
+
+                # If one word is too long, hard-wrap it by characters.
+                if text_width(word) > max_text_width:
+                    chunk = ""
+                    for ch in word:
+                        candidate_chunk = f"{chunk}{ch}"
+                        if chunk and text_width(candidate_chunk) > max_text_width:
+                            lines.append(chunk)
+                            chunk = ch
+                        else:
+                            chunk = candidate_chunk
+                    current_line = chunk
+                else:
+                    current_line = word
+
+            if current_line:
+                lines.append(current_line)
+
+        if not lines:
+            raise HTTPException(status_code=400, detail="Title is required")
+
+        sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
+        line_height = max(1, sample_bbox[3] - sample_bbox[1])
+        line_spacing = max(2, int(line_height * 0.25))
+        total_text_height = (line_height * len(lines)) + (line_spacing * (len(lines) - 1))
+
+        desired_y = int(height * float(body.y_position or 0.14))
+        max_y = max(0, height - total_text_height - int(height * 0.02))
+        y = min(max(desired_y, 0), max_y)
+
+        current_y = y
+        for line in lines:
+            draw.text((x, current_y), line, fill=(0, 0, 0), font=font)
+            current_y += line_height + line_spacing
 
         out = BytesIO()
         image.save(out, format="JPEG", quality=90, optimize=True)
