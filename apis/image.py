@@ -151,9 +151,9 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         image = PILImage.open(BytesIO(image_data)).convert("RGB")
         width, height = image.size
         draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default(height/10)
+        # Slightly reduce title font size from previous setting.
+        font = ImageFont.load_default(height / 12)
 
-        x = int(width * 0.08)
         max_text_width = int(width * 0.84)  # Keep side margins so text never exceeds cover width
 
         def text_width(text: str) -> int:
@@ -210,7 +210,9 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 
         current_y = y
         for line in lines:
-            draw.text((x, current_y), line, fill=(0, 0, 0), font=font)
+            line_w = text_width(line)
+            line_x = max(0, int((width - line_w) / 2))
+            draw.text((line_x, current_y), line, fill=(0, 0, 0), font=font)
             current_y += line_height + line_spacing
 
         out = BytesIO()
