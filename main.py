@@ -609,13 +609,19 @@ def overlay_cover_title_with_reference_style(
         return image_data
 
     draw_measure = ImageDraw.Draw(image)
-    if font_size is None:
-        # Make title very large by default while remaining responsive.
-        font_size = max(140, min(560, int(width * 0.22)))
+    # Control title size in absolute pixels only.
+    try:
+        font_size = int(font_size) if font_size is not None else 290
+    except Exception:
+        font_size = 290
+    if font_size < 1:
+        font_size = 290
     font = _get_cover_title_font(font_size)
 
-    max_text_width = int(width * 0.88)
-    lines = _wrap_cover_title_lines(draw_measure, title, font, max_text_width)
+    # No width restriction box: only respect explicit line breaks from input.
+    lines = [ln.strip() for ln in title.split("\n") if ln.strip()]
+    if not lines:
+        lines = [title]
 
     line_boxes = [draw_measure.textbbox((0, 0), ln, font=font) for ln in lines]
     line_heights = [max(1, b[3] - b[1]) for b in line_boxes]
