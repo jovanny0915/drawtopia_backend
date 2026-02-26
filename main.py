@@ -540,21 +540,33 @@ def _get_font_for_size(font_size: int):
                 return ImageFont.truetype(path, font_size)
         except Exception:
             continue
-    # Pillow commonly ships DejaVu; load by name when absolute paths are unavailable.
-    for bundled_name in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
+    # Pillow commonly ships DejaVu; also try common logical names.
+    for bundled_name in (
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSans.ttf",
+        "LiberationSans-Bold.ttf",
+        "LiberationSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSans-Regular.ttf",
+        "Arial.ttf",
+    ):
         try:
             return ImageFont.truetype(bundled_name, font_size)
         except Exception:
             continue
+    logger.warning("No scalable TrueType font found; using tiny Pillow default font fallback.")
     return ImageFont.load_default()
 
 
 def _get_cover_title_font(font_size: int):
     """Prefer Quicksand Bold for cover titles, then fall back to common bold sans fonts."""
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(backend_dir)
     quicksand_candidates = [
-        "D:/Workspace/github_repo/1. Yaw project/2. jovannyhills0915@outlook.com/drawtopia_frontend/static/fonts/Quicksand-Bold.ttf",
-        "D:/Workspace/github_repo/1. Yaw project/2. jovannyhills0915@outlook.com/drawtopia_frontend/src/lib/fonts/Quicksand-Bold.ttf",
-        "D:/Workspace/github_repo/1. Yaw project/2. jovannyhills0915@outlook.com/assets/Quicksand-Bold.ttf",
+        os.path.join(project_root, "drawtopia_frontend", "static", "fonts", "Quicksand-Bold.ttf"),
+        os.path.join(project_root, "drawtopia_frontend", "src", "lib", "fonts", "Quicksand-Bold.ttf"),
+        os.path.join(project_root, "assets", "Quicksand-Bold.ttf"),
+        os.path.join(project_root, "drawtopia_backend", "assets", "Quicksand-Bold.ttf"),
     ]
     for path in quicksand_candidates:
         try:
