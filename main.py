@@ -576,7 +576,7 @@ def overlay_cover_title_with_reference_style(
         lines = [title]
 
     # Keep font selection simple and scale with image width.
-    font_size = max(24, min(220, width // 10))
+    font_size = max(64, min(520, width // 5))
     font = _get_font_for_size(font_size)
     line_boxes = [draw.textbbox((0, 0), ln, font=font) for ln in lines]
     line_heights = [max(1, b[3] - b[1]) for b in line_boxes]
