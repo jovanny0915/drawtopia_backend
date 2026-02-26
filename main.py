@@ -693,8 +693,8 @@ def overlay_title_on_cover(
     shadow_color = (15, 10, 59)
     shadow_offset_y = max(2, height // 100)
 
-    # Start larger so cover titles match the updated visual style.
-    font_size = min(260, max(32, height // 7))
+    # Use a very large starting title size and do not cap maximum font size.
+    font_size = max(64, height // 4)
     font = _get_font_for_size(font_size)
     lines = _wrap_text_to_width(draw, title.strip(), font, title_box_width)
     while not lines:
