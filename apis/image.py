@@ -54,6 +54,20 @@ class GenerateCoverImageResponse(BaseModel):
     message: str
 
 
+class OverlayCoverTitleRequest(BaseModel):
+    image_url: HttpUrl
+    title: str
+    font_size: Optional[int] = None
+    color_hex: Optional[str] = "#ffffff"
+    y_position: Optional[float] = 0.14
+
+
+class OverlayCoverTitleResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
 class TextBlockOverlay(BaseModel):
     """One block of text to overlay on the image."""
     text: str
@@ -77,97 +91,6 @@ class OverlayBackCoverResponse(BaseModel):
     success: bool
     url: Optional[str] = None
     message: str
-
-
-class UploadCoverImageRequest(BaseModel):
-    """Base64-encoded image (JPEG/PNG). May include data URL prefix."""
-    image_base64: str
-
-
-class UploadCoverImageResponse(BaseModel):
-    success: bool
-    url: Optional[str] = None
-    message: str
-
-
-class OverlayTitleOnCoverRequest(BaseModel):
-    image_url: HttpUrl
-    title: str
-
-
-class OverlayTitleOnCoverResponse(BaseModel):
-    success: bool
-    url: Optional[str] = None
-    message: str
-
-
-@router.post("/overlay-title-on-cover/")
-@limiter.limit("20/minute")
-async def overlay_title_on_cover_endpoint(request: Request, body: OverlayTitleOnCoverRequest):
-    """
-    Overlay the story title on the cover image. Title is wrapped to fit within
-    70% of the image width, then drawn with fill, outline, and shadow. Returns uploaded image URL.
-    """
-    import main
-    try:
-        image_url_str = str(body.image_url)
-        title = (body.title or "").strip()
-        if not title:
-            raise HTTPException(status_code=400, detail="Title is required")
-        main.logger.info(f"Overlaying title on cover: {image_url_str[:80]}...")
-        image_data = main.download_image_from_url(image_url_str)
-        result_bytes = main.overlay_title_on_cover(image_data, title)
-        optimized = main.optimize_image_to_jpg(result_bytes)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
-        storage_result = main.upload_to_supabase(optimized, filename)
-        if storage_result.get("uploaded") and storage_result.get("url"):
-            return OverlayTitleOnCoverResponse(
-                success=True,
-                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
-                message="Cover with title uploaded successfully",
-            )
-        raise HTTPException(status_code=500, detail="Failed to upload cover image to storage")
-    except HTTPException:
-        raise
-    except Exception as e:
-        main.logger.error(f"Error in overlay_title_on_cover_endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/upload-cover-image/")
-@limiter.limit("20/minute")
-async def upload_cover_image_endpoint(request: Request, body: UploadCoverImageRequest):
-    """
-    Decode base64 image, upload to storage, return public URL.
-    Used after client-side compositing (e.g. title overlay on cover).
-    """
-    import main
-    try:
-        raw = body.image_base64.strip()
-        if raw.startswith("data:"):
-            raw = raw.split(",", 1)[-1]
-        image_data = base64.b64decode(raw)
-        if not image_data:
-            raise HTTPException(status_code=400, detail="Invalid or empty image data")
-        optimized = main.optimize_image_to_jpg(image_data)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
-        storage_result = main.upload_to_supabase(optimized, filename)
-        if storage_result.get("uploaded") and storage_result.get("url"):
-            return UploadCoverImageResponse(
-                success=True,
-                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
-                message="Cover image uploaded successfully",
-            )
-        raise HTTPException(status_code=500, detail="Failed to upload cover image to storage")
-    except HTTPException:
-        raise
-    except Exception as e:
-        main.logger.error(f"Error in upload_cover_image_endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/overlay-back-cover/")
@@ -206,6 +129,63 @@ async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRe
         raise
     except Exception as e:
         main.logger.error(f"Error in overlay_back_cover_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/overlay-cover-title/")
+@limiter.limit("20/minute")
+async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitleRequest):
+    """
+    Overlay selected title text on an already-generated cover image using PIL only (no AI).
+    """
+    import main
+    try:
+        image_url_str = str(body.image_url)
+        title_text = (body.title or "").strip()
+        if not title_text:
+            raise HTTPException(status_code=400, detail="Title is required")
+
+        main.logger.info(f"Downloading cover image for title overlay from: {image_url_str}")
+        image_data = main.download_image_from_url(image_url_str)
+
+        font_size = body.font_size
+        if not font_size:
+            try:
+                base_image = main.PILImage.open(BytesIO(image_data))
+                font_size = max(36, min(96, int(base_image.width * 0.07)))
+            except Exception:
+                font_size = 56
+
+        text_blocks = [{
+            "text": title_text,
+            "font_size": font_size,
+            "color_hex": body.color_hex or "#ffffff",
+            "y_position": max(0.05, min(0.35, float(body.y_position or 0.14))),
+            "alignment": "center",
+            "shadow": True,
+            "shadow_color": "#000000",
+            "shadow_offset": 3,
+        }]
+
+        with_title = main.overlay_text_on_image(image_data, text_blocks)
+        optimized = main.optimize_image_to_jpg(with_title)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return OverlayCoverTitleResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0],
+                message="Cover title overlaid and uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload titled cover image to storage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in overlay_cover_title_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
