@@ -673,13 +673,13 @@ def overlay_title_on_cover(
     fill_hex: str = "#F3E5CB",
     outline_hex: str = "#0F3D4A",
     outline_width: int = 5,
-    title_box_width_ratio: float = 0.95,
+    title_box_width_ratio: float = 0.7,
     y_position_ratio: float = 0.15,
 ) -> bytes:
     """
     Overlay a single title on the cover image. Title is wrapped to fit within
-    a box that is less than the image width (default 95% of width).
-    Draws with fill, outline (stroke), and drop shadow. Font size is large.
+    a box that is title_box_width_ratio (default 70%) of the image width.
+    Draws with fill, outline (stroke), and drop shadow.
     """
     if not title or not title.strip():
         return image_data
@@ -693,8 +693,8 @@ def overlay_title_on_cover(
     shadow_color = (15, 10, 59)
     shadow_offset_y = max(2, height // 100)
 
-    # Very large title: use ~38% of image height (was 25%), cap 500px
-    font_size = min(500, max(64, int(height / 2.6)))
+    # Start larger so cover titles match the updated visual style.
+    font_size = min(260, max(32, height // 7))
     font = _get_font_for_size(font_size)
     lines = _wrap_text_to_width(draw, title.strip(), font, title_box_width)
     while not lines:
