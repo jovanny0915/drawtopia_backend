@@ -657,6 +657,32 @@ _CTA_LINK_ICON_CANDIDATES = [
 ]
 
 
+def _draw_cover_bottom_logo(c: canvas.Canvas, width: float, height: float) -> None:
+    """Draw Drawtopia logo centered near the bottom of the cover page."""
+    logo_w = width * 0.25
+    logo_h = logo_w * 0.223  # Match white-logo.png aspect ratio
+    logo_x = (width - logo_w) / 2
+    logo_y = max(height * 0.035, 18)
+
+    for logo_path in _BACK_COVER_LOGO_CANDIDATES:
+        if logo_path.exists():
+            try:
+                c.drawImage(
+                    ImageReader(str(logo_path)),
+                    logo_x,
+                    logo_y,
+                    width=logo_w,
+                    height=logo_h,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Failed to draw cover logo from {logo_path}: {e}")
+
+    logger.warning("Cover logo not found; skipping Drawtopia logo on cover")
+
+
 def _draw_cta_link_icon(c: canvas.Canvas, x: float, y: float, size: float) -> None:
     """Draw a compact white link icon for the CTA button."""
     c.saveState()
@@ -1511,6 +1537,7 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_full_page_image(c, story_cover_url, width, height, "cover"):
                 page_count += 1
+            _draw_cover_bottom_logo(c, width, height)
             c.showPage()
 
         # 2. Copyright page (image + text overlay, same style as preview)
