@@ -152,7 +152,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         width, height = image.size
         draw = ImageDraw.Draw(image)
         # Slightly reduce title font size from previous setting.
-        font = ImageFont.load_default(height / 12)
+        font = ImageFont.load_default(width / 10)
 
         max_text_width = int(width * 0.84)  # Keep side margins so text never exceeds cover width
 
