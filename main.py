@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from io import BytesIO
-from PIL import Image as PILImage, ImageDraw, ImageFont, ImageFilter
+from PIL import Image as PILImage, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
 from google.genai.types import Image as GeminiImage
@@ -558,138 +558,42 @@ def _get_font_for_size(font_size: int):
     return ImageFont.load_default()
 
 
-def _get_cover_title_font(font_size: int):
-    """Prefer Quicksand Bold for cover titles, then fall back to common bold sans fonts."""
-    backend_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(backend_dir)
-    quicksand_candidates = [
-        os.path.join(project_root, "drawtopia_frontend", "static", "fonts", "Quicksand-Bold.ttf"),
-        os.path.join(project_root, "drawtopia_frontend", "src", "lib", "fonts", "Quicksand-Bold.ttf"),
-        os.path.join(project_root, "assets", "Quicksand-Bold.ttf"),
-        os.path.join(project_root, "drawtopia_backend", "assets", "Quicksand-Bold.ttf"),
-    ]
-    for path in quicksand_candidates:
-        try:
-            if os.path.exists(path):
-                return ImageFont.truetype(path, font_size)
-        except Exception:
-            continue
-    try:
-        return ImageFont.truetype("Quicksand-Bold.ttf", font_size)
-    except Exception:
-        return _get_font_for_size(font_size)
-
-
-def _wrap_cover_title_lines(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> List[str]:
-    """Word-wrap title text so it fits the available width."""
-    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    wrapped: List[str] = []
-    for raw_line in raw_lines:
-        words = raw_line.split()
-        if not words:
-            continue
-        current = words[0]
-        for word in words[1:]:
-            candidate = f"{current} {word}"
-            bbox = draw.textbbox((0, 0), candidate, font=font)
-            if (bbox[2] - bbox[0]) <= max_width:
-                current = candidate
-            else:
-                wrapped.append(current)
-                current = word
-        wrapped.append(current)
-    return wrapped if wrapped else [text.strip()]
-
-
 def overlay_cover_title_with_reference_style(
     image_data: bytes,
     title_text: str,
     y_position: float = 0.14,
 ) -> bytes:
-    """
-    Overlay title using reference style:
-    - Quicksand bold (or closest fallback)
-    - Fill #F3E5CB
-    - Stroke 20px @ 2137px basis scaled by image width
-    - Glow and vertical drop shadow
-    """
+    """Draw plain title text on the cover image."""
     image = PILImage.open(BytesIO(image_data)).convert("RGB")
     width, height = image.size
     title = (title_text or "").strip()
     if not title:
         return image_data
 
-    draw_measure = ImageDraw.Draw(image)
-    # No width restriction box: only respect explicit line breaks from input.
+    draw = ImageDraw.Draw(image)
     lines = [ln.strip() for ln in title.split("\n") if ln.strip()]
     if not lines:
         lines = [title]
 
-    # Title font size is fixed by product requirement.
-    font_size = 800
-
-    font = _get_cover_title_font(font_size)
-
-    line_boxes = [draw_measure.textbbox((0, 0), ln, font=font) for ln in lines]
+    # Keep font selection simple and scale with image width.
+    font_size = max(24, min(220, width // 10))
+    font = _get_font_for_size(font_size)
+    line_boxes = [draw.textbbox((0, 0), ln, font=font) for ln in lines]
     line_heights = [max(1, b[3] - b[1]) for b in line_boxes]
-    line_spacing = 0  # 100% line-height from reference
+    line_spacing = max(4, font_size // 8)
     total_height = sum(line_heights) + line_spacing * max(0, len(lines) - 1)
 
-    # Keep direct position control without clamping.
     title_center_y = int(height * y_position)
     start_y = max(10, title_center_y - total_height // 2)
-
-    fill_color = (243, 229, 203, 255)  # #F3E5CB
-    stroke_color = (28, 89, 111, 255)  # #1C596F
-    shadow_color = (15, 10, 59, 128)   # rgba(15,10,59,0.5)
-    glow_color = (243, 229, 203, 170)
-
-    # Keep outline/glow/shadow visually consistent after fixing title font size.
-    # Values are based on a 2137px-wide reference cover.
-    width_scale = max(0.2, width / 2137.0)
-    stroke_width = max(2, int(round(20 * width_scale)))
-    glow_radius = max(10, int(round(100 * width_scale)))
-    shadow_offset_y = max(2, int(round(15 * width_scale)))
-
-    base = image.convert("RGBA")
-
-    # Soft glow layer behind title
-    glow_layer = PILImage.new("RGBA", base.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow_layer)
     current_y = start_y
     for i, line in enumerate(lines):
         lw = line_boxes[i][2] - line_boxes[i][0]
         x = (width - lw) // 2
-        glow_draw.text(
-            (x, current_y),
-            line,
-            font=font,
-            fill=glow_color,
-            stroke_width=stroke_width,
-            stroke_fill=glow_color,
-        )
-        current_y += line_heights[i] + line_spacing
-    base.alpha_composite(glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_radius)))
-
-    # Crisp drop shadow + main title fill/stroke
-    draw = ImageDraw.Draw(base)
-    current_y = start_y
-    for i, line in enumerate(lines):
-        lw = line_boxes[i][2] - line_boxes[i][0]
-        x = (width - lw) // 2
-        draw.text((x, current_y + shadow_offset_y), line, font=font, fill=shadow_color)
-        draw.text(
-            (x, current_y),
-            line,
-            font=font,
-            fill=fill_color,
-            stroke_width=stroke_width,
-            stroke_fill=stroke_color,
-        )
+        draw.text((x, current_y), line, font=font, fill=(0, 0, 0))
         current_y += line_heights[i] + line_spacing
 
     out = BytesIO()
-    base.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
+    image.save(out, format="JPEG", quality=90, optimize=True)
     return out.getvalue()
 
 

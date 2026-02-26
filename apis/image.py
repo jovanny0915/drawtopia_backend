@@ -57,7 +57,6 @@ class GenerateCoverImageResponse(BaseModel):
 class OverlayCoverTitleRequest(BaseModel):
     image_url: HttpUrl
     title: str
-    color_hex: Optional[str] = "#ffffff"
     y_position: Optional[float] = 0.14
 
 
