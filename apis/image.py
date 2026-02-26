@@ -57,7 +57,6 @@ class GenerateCoverImageResponse(BaseModel):
 class OverlayCoverTitleRequest(BaseModel):
     image_url: HttpUrl
     title: str
-    font_size: Optional[int] = None
     color_hex: Optional[str] = "#ffffff"
     y_position: Optional[float] = 0.14
 
@@ -151,7 +150,6 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         with_title = main.overlay_cover_title_with_reference_style(
             image_data=image_data,
             title_text=title_text,
-            font_size=body.font_size,
             y_position=float(body.y_position or 0.14),
         )
         optimized = main.optimize_image_to_jpg(with_title)

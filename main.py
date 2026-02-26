@@ -592,7 +592,6 @@ def _wrap_cover_title_lines(draw: ImageDraw.ImageDraw, text: str, font, max_widt
 def overlay_cover_title_with_reference_style(
     image_data: bytes,
     title_text: str,
-    font_size: Optional[int] = None,
     y_position: float = 0.14,
 ) -> bytes:
     """
@@ -614,23 +613,8 @@ def overlay_cover_title_with_reference_style(
     if not lines:
         lines = [title]
 
-    # Make title very large: if no explicit px is provided, auto-fit to image width.
-    if font_size is not None:
-        try:
-            font_size = max(1, int(font_size))
-        except Exception:
-            font_size = 290
-    else:
-        target_width = int(width * 0.96)
-        probe_size = max(120, int(width * 0.28))
-        font = _get_cover_title_font(probe_size)
-        max_line_width = 1
-        for line in lines:
-            bbox = draw_measure.textbbox((0, 0), line, font=font)
-            max_line_width = max(max_line_width, bbox[2] - bbox[0])
-        scale = target_width / max_line_width
-        fitted = int(probe_size * scale)
-        font_size = max(120, min(1400, fitted))
+    # Title font size is fixed by product requirement.
+    font_size = 500
 
     font = _get_cover_title_font(font_size)
 
@@ -648,10 +632,12 @@ def overlay_cover_title_with_reference_style(
     shadow_color = (15, 10, 59, 128)   # rgba(15,10,59,0.5)
     glow_color = (243, 229, 203, 170)
 
-    # Scale effects from reference values (20 stroke, 100 glow, 15 y-shadow at 290 font size)
-    stroke_width = max(2, int(font_size * (20 / 290)))
-    glow_radius = max(10, min(100, int(font_size * (100 / 290))))
-    shadow_offset_y = max(2, int(font_size * (15 / 290)))
+    # Keep outline/glow/shadow visually consistent after fixing title font size.
+    # Values are based on a 2137px-wide reference cover.
+    width_scale = max(0.2, width / 2137.0)
+    stroke_width = max(2, int(round(20 * width_scale)))
+    glow_radius = max(10, int(round(100 * width_scale)))
+    shadow_offset_y = max(2, int(round(15 * width_scale)))
 
     base = image.convert("RGBA")
 
