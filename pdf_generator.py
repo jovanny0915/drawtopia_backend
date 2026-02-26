@@ -1402,8 +1402,8 @@ def _draw_back_cover_text(
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
     y = height * 0.79
-    title_font_size = 35
-    title_line_gap = height * 0.062
+    title_font_size = 39
+    title_line_gap = height * 0.066
     stroke_width = max(2.0, title_font_size * 0.13)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
@@ -1422,12 +1422,12 @@ def _draw_back_cover_text(
         y -= title_line_gap
 
     y -= height * 0.012
-    desc_font = 16
+    desc_font = 19
     c.setFont(regular_font, desc_font)
     c.setFillColor(TEXT_WHITE)
     desc = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
-    lines = _wrap_lines(c, desc, max_w * 0.78, regular_font, desc_font)
-    line_height = desc_font * 1.52
+    lines = _wrap_lines(c, desc, max_w * 0.90, regular_font, desc_font)
+    line_height = desc_font * 1.48
     for line in lines:
         w = c.stringWidth(line, regular_font, desc_font)
         c.drawString(cx - w / 2, y, line)
