@@ -148,26 +148,12 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         main.logger.info(f"Downloading cover image for title overlay from: {image_url_str}")
         image_data = main.download_image_from_url(image_url_str)
 
-        font_size = body.font_size
-        if not font_size:
-            try:
-                base_image = main.PILImage.open(BytesIO(image_data))
-                font_size = max(36, min(96, int(base_image.width * 0.07)))
-            except Exception:
-                font_size = 56
-
-        text_blocks = [{
-            "text": title_text,
-            "font_size": font_size,
-            "color_hex": body.color_hex or "#ffffff",
-            "y_position": max(0.05, min(0.35, float(body.y_position or 0.14))),
-            "alignment": "center",
-            "shadow": True,
-            "shadow_color": "#000000",
-            "shadow_offset": 3,
-        }]
-
-        with_title = main.overlay_text_on_image(image_data, text_blocks)
+        with_title = main.overlay_cover_title_with_reference_style(
+            image_data=image_data,
+            title_text=title_text,
+            font_size=body.font_size,
+            y_position=float(body.y_position or 0.14),
+        )
         optimized = main.optimize_image_to_jpg(with_title)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
