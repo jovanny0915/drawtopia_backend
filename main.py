@@ -609,26 +609,38 @@ def overlay_cover_title_with_reference_style(
         return image_data
 
     draw_measure = ImageDraw.Draw(image)
-    # Control title size in absolute pixels only.
-    try:
-        font_size = int(font_size) if font_size is not None else 290
-    except Exception:
-        font_size = 290
-    if font_size < 1:
-        font_size = 290
-    font = _get_cover_title_font(font_size)
-
     # No width restriction box: only respect explicit line breaks from input.
     lines = [ln.strip() for ln in title.split("\n") if ln.strip()]
     if not lines:
         lines = [title]
+
+    # Make title very large: if no explicit px is provided, auto-fit to image width.
+    if font_size is not None:
+        try:
+            font_size = max(1, int(font_size))
+        except Exception:
+            font_size = 290
+    else:
+        target_width = int(width * 0.96)
+        probe_size = max(120, int(width * 0.28))
+        font = _get_cover_title_font(probe_size)
+        max_line_width = 1
+        for line in lines:
+            bbox = draw_measure.textbbox((0, 0), line, font=font)
+            max_line_width = max(max_line_width, bbox[2] - bbox[0])
+        scale = target_width / max_line_width
+        fitted = int(probe_size * scale)
+        font_size = max(120, min(1400, fitted))
+
+    font = _get_cover_title_font(font_size)
 
     line_boxes = [draw_measure.textbbox((0, 0), ln, font=font) for ln in lines]
     line_heights = [max(1, b[3] - b[1]) for b in line_boxes]
     line_spacing = 0  # 100% line-height from reference
     total_height = sum(line_heights) + line_spacing * max(0, len(lines) - 1)
 
-    title_center_y = int(height * max(0.05, min(0.35, y_position)))
+    # Keep direct position control without clamping.
+    title_center_y = int(height * y_position)
     start_y = max(10, title_center_y - total_height // 2)
 
     fill_color = (243, 229, 203, 255)  # #F3E5CB
