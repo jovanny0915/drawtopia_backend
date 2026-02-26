@@ -610,8 +610,8 @@ def overlay_cover_title_with_reference_style(
 
     draw_measure = ImageDraw.Draw(image)
     if font_size is None:
-        # Reference: 290px text on ~2137px width
-        font_size = max(72, min(320, int(width * 0.136)))
+        # Make title very large by default while remaining responsive.
+        font_size = max(140, min(560, int(width * 0.22)))
     font = _get_cover_title_font(font_size)
 
     max_text_width = int(width * 0.88)
