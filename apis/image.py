@@ -90,6 +90,52 @@ class UploadCoverImageResponse(BaseModel):
     message: str
 
 
+class OverlayTitleOnCoverRequest(BaseModel):
+    image_url: HttpUrl
+    title: str
+
+
+class OverlayTitleOnCoverResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
+@router.post("/overlay-title-on-cover/")
+@limiter.limit("20/minute")
+async def overlay_title_on_cover_endpoint(request: Request, body: OverlayTitleOnCoverRequest):
+    """
+    Overlay the story title on the cover image. Title is wrapped to fit within
+    70% of the image width, then drawn with fill, outline, and shadow. Returns uploaded image URL.
+    """
+    import main
+    try:
+        image_url_str = str(body.image_url)
+        title = (body.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        main.logger.info(f"Overlaying title on cover: {image_url_str[:80]}...")
+        image_data = main.download_image_from_url(image_url_str)
+        result_bytes = main.overlay_title_on_cover(image_data, title, title_box_width_ratio=0.7)
+        optimized = main.optimize_image_to_jpg(result_bytes)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return OverlayTitleOnCoverResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
+                message="Cover with title uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload cover image to storage")
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in overlay_title_on_cover_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/upload-cover-image/")
 @limiter.limit("20/minute")
 async def upload_cover_image_endpoint(request: Request, body: UploadCoverImageRequest):

@@ -640,6 +640,104 @@ def overlay_text_on_image(
     return out.getvalue()
 
 
+def _wrap_text_to_width(draw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list:
+    """Split text into lines so each line width <= max_width (word wrap)."""
+    words = text.strip().split()
+    if not words:
+        return []
+    lines = []
+    current = []
+    current_width = 0
+    space_width = draw.textbbox((0, 0), " ", font=font)[2] - draw.textbbox((0, 0), " ", font=font)[0]
+    for word in words:
+        w_bbox = draw.textbbox((0, 0), word, font=font)
+        w_w = w_bbox[2] - w_bbox[0]
+        candidate = " ".join(current + [word]) if current else word
+        c_bbox = draw.textbbox((0, 0), candidate, font=font)
+        c_w = c_bbox[2] - c_bbox[0]
+        if current and c_w > max_width:
+            lines.append(" ".join(current))
+            current = [word]
+            current_width = w_w
+        else:
+            current.append(word)
+            current_width = c_w
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
+def overlay_title_on_cover(
+    image_data: bytes,
+    title: str,
+    fill_hex: str = "#F3E5CB",
+    outline_hex: str = "#0F3D4A",
+    outline_width: int = 5,
+    title_box_width_ratio: float = 0.7,
+    y_position_ratio: float = 0.15,
+) -> bytes:
+    """
+    Overlay a single title on the cover image. Title is wrapped to fit within
+    a box that is title_box_width_ratio (default 70%) of the image width.
+    Draws with fill, outline (stroke), and drop shadow.
+    """
+    if not title or not title.strip():
+        return image_data
+    image = PILImage.open(BytesIO(image_data)).convert("RGB")
+    width, height = image.size
+    title_box_width = int(width * title_box_width_ratio)
+    draw = ImageDraw.Draw(image)
+
+    fill_color = _hex_to_rgb(fill_hex)
+    outline_color = _hex_to_rgb(outline_hex)
+    shadow_color = (15, 10, 59)
+    shadow_offset_y = max(2, height // 100)
+
+    font_size = min(200, max(24, height // 10))
+    font = _get_font_for_size(font_size)
+    lines = _wrap_text_to_width(draw, title.strip(), font, title_box_width)
+    while not lines:
+        font_size = max(12, font_size - 4)
+        font = _get_font_for_size(font_size)
+        lines = _wrap_text_to_width(draw, title.strip(), font, title_box_width)
+        if font_size <= 12:
+            break
+
+    line_heights = []
+    max_lw = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        lw = bbox[2] - bbox[0]
+        lh = bbox[3] - bbox[1]
+        line_heights.append((lw, lh))
+        max_lw = max(max_lw, lw)
+    line_gap = font_size // 4
+    total_height = sum(h for _, h in line_heights) + (len(lines) - 1) * line_gap
+    block_top = int(height * y_position_ratio - total_height / 2)
+    block_top = max(10, min(block_top, height - total_height - 10))
+
+    outline_offsets = []
+    for dx in range(-outline_width, outline_width + 1):
+        for dy in range(-outline_width, outline_width + 1):
+            if dx * dx + dy * dy <= outline_width * outline_width:
+                outline_offsets.append((dx, dy))
+
+    for i, line in enumerate(lines):
+        lw, lh = line_heights[i]
+        x_center = width // 2
+        x = x_center - lw // 2
+        y = block_top + sum(line_heights[j][1] for j in range(i)) + i * line_gap
+
+        draw.text((x + shadow_offset_y, y + shadow_offset_y), line, font=font, fill=shadow_color)
+        for (dx, dy) in outline_offsets:
+            draw.text((x + dx, y + dy), line, font=font, fill=outline_color)
+        draw.text((x, y), line, font=font, fill=fill_color)
+
+    out = BytesIO()
+    image.save(out, format="JPEG", quality=90, optimize=True)
+    return out.getvalue()
+
+
 def _generate_isbn13_barcode_image(isbn13: str) -> Optional[bytes]:
     """Generate an ISBN-13 barcode as PNG bytes. isbn13 can be 12 or 13 digits."""
     try:
