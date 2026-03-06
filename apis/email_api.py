@@ -742,7 +742,7 @@ async def send_receipt_email_endpoint(request: Request):
         # Send receipt email
         result = await _send_email(
             to_email,
-            template_id="order-receipt-confirmation",
+            template_id="payment-confirmation-email",
             template_data={
                 "customer_name": customer_name,
                 "transaction_id": transaction_id,

@@ -2810,11 +2810,15 @@ def mark_story_as_purchased_for_user(
     if not story_id_raw or str(story_id_raw).strip().lower() in ("none", "null", ""):
         return False
 
+    story_identifier = str(story_id_raw).strip()
+    story_id_int: Optional[int] = None
+    use_uid = False
+
+    # Frontend preview flow typically sends stories.uid in query params; support both id and uid.
     try:
-        story_id = int(str(story_id_raw).strip())
+        story_id_int = int(story_identifier)
     except (TypeError, ValueError):
-        logger.warning(f"Invalid story_id for purchase update: {story_id_raw}")
-        return False
+        use_uid = True
 
     target_user_id: Optional[str] = None
     if user_id_raw and str(user_id_raw).strip().lower() not in ("unknown", "none", "null", ""):
@@ -2828,30 +2832,34 @@ def mark_story_as_purchased_for_user(
             logger.warning(f"Could not resolve user by email {customer_email} for purchase update: {e}")
 
     if not target_user_id:
+        story_ref = f"uid={story_identifier}" if use_uid else f"id={story_id_int}"
         logger.warning(
-            f"Skipping purchased=true update for story {story_id}: user could not be resolved "
+            f"Skipping purchased=true update for story ({story_ref}): user could not be resolved "
             f"(user_id={user_id_raw}, email={customer_email})"
         )
         return False
 
     try:
-        response = (
-            supabase.table("stories")
-            .update({"purchased": True})
-            .eq("id", story_id)
-            .eq("user_id", target_user_id)
-            .execute()
-        )
+        update_query = supabase.table("stories").update({"purchased": True})
+        if use_uid:
+            update_query = update_query.eq("uid", story_identifier)
+        else:
+            update_query = update_query.eq("id", story_id_int)
+
+        response = update_query.eq("user_id", target_user_id).execute()
         if response.data and len(response.data) > 0:
-            logger.info(f"✅ Marked story {story_id} as purchased for user {target_user_id}")
+            story_ref = f"uid={story_identifier}" if use_uid else f"id={story_id_int}"
+            logger.info(f"✅ Marked story ({story_ref}) as purchased for user {target_user_id}")
             return True
 
         logger.warning(
-            f"No matching story row updated for purchased=true (story_id={story_id}, user_id={target_user_id})"
+            f"No matching story row updated for purchased=true "
+            f"(story_ref={'uid=' + story_identifier if use_uid else 'id=' + str(story_id_int)}, user_id={target_user_id})"
         )
         return False
     except Exception as e:
-        logger.error(f"Error updating stories.purchased for story {story_id}, user {target_user_id}: {e}")
+        story_ref = f"uid={story_identifier}" if use_uid else f"id={story_id_int}"
+        logger.error(f"Error updating stories.purchased for story ({story_ref}), user {target_user_id}: {e}")
         return False
 
 
@@ -3510,7 +3518,11 @@ async def get_stripe_config():
 
 
 @app.get("/api/stripe/session/{session_id}")
-async def get_checkout_session(session_id: str):
+async def get_checkout_session(
+    session_id: str,
+    fallback_story_id: Optional[str] = None,
+    fallback_user_id: Optional[str] = None
+):
     """
     Get Stripe checkout session details for frontend to retrieve payment information.
     This allows the frontend to get payment details and send confirmation emails.
@@ -3560,13 +3572,23 @@ async def get_checkout_session(session_id: str):
         metadata = session.get("metadata", {})
         if mode == "payment":
             purchase_type = metadata.get("purchase_type", "single_story")
-            story_id = metadata.get("story_id")
-            user_id = metadata.get("user_id")
+            metadata_story_id = metadata.get("story_id")
+            metadata_user_id = metadata.get("user_id")
+
+            # Fallback to query params when Stripe metadata is missing/placeholder.
+            story_id = metadata_story_id
+            if not story_id or str(story_id).strip().lower() in ("none", "null", ""):
+                story_id = fallback_story_id
+
+            resolved_user_id = metadata_user_id
+            if not resolved_user_id or str(resolved_user_id).strip().lower() in ("unknown", "none", "null", ""):
+                resolved_user_id = fallback_user_id
+
             if payment_status == "paid" and purchase_type in ("single_story", "story_bundle"):
                 # Also update here so frontend verification path guarantees purchased=true
                 mark_story_as_purchased_for_user(
                     story_id_raw=story_id,
-                    user_id_raw=user_id,
+                    user_id_raw=resolved_user_id,
                     customer_email=customer_email
                 )
         
