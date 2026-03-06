@@ -2794,6 +2794,67 @@ def get_product_metadata_from_subscription(subscription):
         return None
 
 
+def mark_story_as_purchased_for_user(
+    story_id_raw: Optional[str],
+    user_id_raw: Optional[str],
+    customer_email: Optional[str] = None
+) -> bool:
+    """
+    Mark stories.purchased=True for the specific story and owner user.
+    Returns True when an update is applied, otherwise False.
+    """
+    if not supabase:
+        logger.warning("Cannot mark story as purchased: Supabase is not configured")
+        return False
+
+    if not story_id_raw or str(story_id_raw).strip().lower() in ("none", "null", ""):
+        return False
+
+    try:
+        story_id = int(str(story_id_raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid story_id for purchase update: {story_id_raw}")
+        return False
+
+    target_user_id: Optional[str] = None
+    if user_id_raw and str(user_id_raw).strip().lower() not in ("unknown", "none", "null", ""):
+        target_user_id = str(user_id_raw).strip()
+    elif customer_email:
+        try:
+            user_result = supabase.table("users").select("id").eq("email", customer_email).limit(1).execute()
+            if user_result.data and len(user_result.data) > 0:
+                target_user_id = user_result.data[0].get("id")
+        except Exception as e:
+            logger.warning(f"Could not resolve user by email {customer_email} for purchase update: {e}")
+
+    if not target_user_id:
+        logger.warning(
+            f"Skipping purchased=true update for story {story_id}: user could not be resolved "
+            f"(user_id={user_id_raw}, email={customer_email})"
+        )
+        return False
+
+    try:
+        response = (
+            supabase.table("stories")
+            .update({"purchased": True})
+            .eq("id", story_id)
+            .eq("user_id", target_user_id)
+            .execute()
+        )
+        if response.data and len(response.data) > 0:
+            logger.info(f"✅ Marked story {story_id} as purchased for user {target_user_id}")
+            return True
+
+        logger.warning(
+            f"No matching story row updated for purchased=true (story_id={story_id}, user_id={target_user_id})"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Error updating stories.purchased for story {story_id}, user {target_user_id}: {e}")
+        return False
+
+
 async def handle_checkout_completed(session):
     """Handle successful checkout session completion"""
     try:
@@ -2858,14 +2919,17 @@ async def handle_checkout_completed(session):
                 else:
                     logger.warning(f"No product metadata (credit) for {purchase_type} purchase; set Stripe product metadata 'credit' or 'credits'")
             
-            # Mark story as purchased if story_id is provided and payment is successful
+            # Mark story as purchased in stories table for current user + story
             if story_id and payment_status == "paid" and supabase:
                 try:
-                    # Log the purchase (no longer updating stories table)
-                    logger.info(f"Story {story_id} was purchased (not updating stories table)")
-                        
+                    customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+                    mark_story_as_purchased_for_user(
+                        story_id_raw=story_id,
+                        user_id_raw=user_id,
+                        customer_email=customer_email
+                    )
                 except Exception as e:
-                    logger.error(f"Error logging story {story_id} purchase: {e}")
+                    logger.error(f"Error marking story {story_id} as purchased: {e}")
             
             return
         
@@ -3492,9 +3556,19 @@ async def get_checkout_session(session_id: str):
         
         # For one-time payments, determine purchase type from metadata
         purchase_type = None
+        story_id = None
+        metadata = session.get("metadata", {})
         if mode == "payment":
-            metadata = session.get("metadata", {})
             purchase_type = metadata.get("purchase_type", "single_story")
+            story_id = metadata.get("story_id")
+            user_id = metadata.get("user_id")
+            if payment_status == "paid" and purchase_type in ("single_story", "story_bundle"):
+                # Also update here so frontend verification path guarantees purchased=true
+                mark_story_as_purchased_for_user(
+                    story_id_raw=story_id,
+                    user_id_raw=user_id,
+                    customer_email=customer_email
+                )
         
         # Get invoice ID if available
         invoice_id = session.get("invoice")
@@ -3510,6 +3584,7 @@ async def get_checkout_session(session_id: str):
             "plan_type": plan_type,
             "next_billing_date": next_billing_date,
             "purchase_type": purchase_type,
+            "story_id": story_id,
             "subscription_id": subscription_id,
             "invoice_id": invoice_id,
             "session_id": session_id
