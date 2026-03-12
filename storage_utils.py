@@ -2,10 +2,16 @@
 Storage utility functions for deleting files from Supabase S3 buckets
 """
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+SHARED_TEMPLATE_PREFIXES = (
+    "book-templates/",
+    "book_templates/",
+)
 
 
 def extract_storage_path_from_url(url: str) -> Optional[tuple[str, str]]:
@@ -26,17 +32,24 @@ def extract_storage_path_from_url(url: str) -> Optional[tuple[str, str]]:
         parsed = urlparse(url)
         path = parsed.path
         
-        # Expected format: /storage/v1/object/public/{bucket}/{file_path}
-        if '/storage/v1/object/public/' in path:
-            parts = path.split('/storage/v1/object/public/', 1)
-            if len(parts) == 2:
+        # Handle common Supabase storage URL formats:
+        # - /storage/v1/object/public/{bucket}/{file_path}
+        # - /storage/v1/object/sign/{bucket}/{file_path}
+        # - /storage/v1/object/authenticated/{bucket}/{file_path}
+        marker = "/storage/v1/object/"
+        if marker in path:
+            parts = path.split(marker, 1)
+            if len(parts) == 2 and parts[1]:
                 remaining = parts[1]
-                # Split into bucket and file path
-                path_parts = remaining.split('/', 1)
-                if len(path_parts) >= 1:
-                    bucket = path_parts[0]
-                    file_path = path_parts[1] if len(path_parts) > 1 else ""
-                    return (bucket, file_path)
+                visibility_split = remaining.split("/", 1)
+                if len(visibility_split) == 2 and visibility_split[1]:
+                    bucket_and_path = visibility_split[1]
+                    path_parts = bucket_and_path.split("/", 1)
+                    if len(path_parts) >= 1:
+                        bucket = path_parts[0]
+                        file_path = path_parts[1] if len(path_parts) > 1 else ""
+                        if bucket:
+                            return (bucket, file_path)
         
         return None
     except Exception as e:
@@ -99,7 +112,97 @@ def delete_files_from_storage(supabase_client, urls: List[str]) -> dict:
     }
 
 
-def delete_story_images(supabase_client, story_data: dict, exclude_character_images: bool = True) -> dict:
+def _is_shared_template_asset(url: str) -> bool:
+    """
+    Return True when URL points to a shared book-template asset.
+
+    Shared template files are reused by many stories and must not be deleted
+    during per-story cleanup.
+    """
+    parsed = extract_storage_path_from_url(url)
+    if not parsed:
+        return False
+
+    _, file_path = parsed
+    normalized_path = (file_path or "").lstrip("/").lower()
+    return any(normalized_path.startswith(prefix) for prefix in SHARED_TEMPLATE_PREFIXES)
+
+
+def _normalized_storage_target(url: str) -> Optional[Tuple[str, str]]:
+    """
+    Convert a storage URL to a comparable (bucket, normalized_path) tuple.
+    """
+    parsed = extract_storage_path_from_url(url)
+    if not parsed:
+        return None
+
+    bucket, file_path = parsed
+    normalized_bucket = (bucket or "").strip().lower()
+    normalized_path = (file_path or "").lstrip("/")
+    if not normalized_bucket or not normalized_path:
+        return None
+    return (normalized_bucket, normalized_path)
+
+
+def _build_protected_storage_targets(urls: Optional[Set[str]]) -> Set[Tuple[str, str]]:
+    """
+    Build normalized storage targets from protected URL strings.
+    """
+    if not urls:
+        return set()
+
+    targets: Set[Tuple[str, str]] = set()
+    for url in urls:
+        if not isinstance(url, str) or not url.strip():
+            continue
+        target = _normalized_storage_target(url)
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _collect_urls(value) -> List[str]:
+    """Normalize a URL-like field into a list of URL strings."""
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item.strip()]
+    return []
+
+
+def collect_book_template_image_urls(supabase_client) -> Set[str]:
+    """
+    Load all image URLs referenced by book templates.
+    These URLs are shared assets and must never be deleted by story cleanup.
+    """
+    template_columns = (
+        "cover_image,story_page_images,copyright_page_image,"
+        "dedication_page_image,last_words_page_image,last_story_page_image,back_cover_image"
+    )
+    response = supabase_client.table("book_templates").select(template_columns).execute()
+    template_rows = response.data or []
+
+    urls: Set[str] = set()
+    for row in template_rows:
+        if not isinstance(row, dict):
+            continue
+
+        urls.update(_collect_urls(row.get("cover_image")))
+        urls.update(_collect_urls(row.get("story_page_images")))
+        urls.update(_collect_urls(row.get("copyright_page_image")))
+        urls.update(_collect_urls(row.get("dedication_page_image")))
+        urls.update(_collect_urls(row.get("last_words_page_image")))
+        urls.update(_collect_urls(row.get("last_story_page_image")))
+        urls.update(_collect_urls(row.get("back_cover_image")))
+    return urls
+
+
+def delete_story_images(
+    supabase_client,
+    story_data: dict,
+    exclude_character_images: bool = True,
+    protected_urls: Optional[Set[str]] = None,
+) -> dict:
     """
     Delete story images from Supabase storage
     
@@ -107,33 +210,35 @@ def delete_story_images(supabase_client, story_data: dict, exclude_character_ima
         supabase_client: Supabase client instance
         story_data: Story data dictionary from database
         exclude_character_images: If True, keep character image and enhancement images
+        protected_urls: Optional set of shared URLs that must never be deleted
     
     Returns:
         Dict with deletion statistics
     """
     urls_to_delete = []
     
-    # Collect story-specific images (always delete these)
-    if story_data.get("story_cover"):
-        urls_to_delete.append(story_data["story_cover"])
-    
-    if story_data.get("scene_images"):
-        scene_images = story_data["scene_images"]
-        if isinstance(scene_images, list):
-            urls_to_delete.extend([img for img in scene_images if img])
-    
-    if story_data.get("dedication_image"):
-        urls_to_delete.append(story_data["dedication_image"])
-    
-    # Delete audio files
-    if story_data.get("audio_url"):
-        audio_urls = story_data["audio_url"]
-        if isinstance(audio_urls, list):
-            urls_to_delete.extend([audio for audio in audio_urls if audio])
-    
-    # Delete PDF if exists
-    if story_data.get("pdf_url"):
-        urls_to_delete.append(story_data["pdf_url"])
+    # Collect story-specific files.
+    urls_to_delete.extend(_collect_urls(story_data.get("story_cover")))
+    urls_to_delete.extend(_collect_urls(story_data.get("scene_images")))
+    urls_to_delete.extend(_collect_urls(story_data.get("dedication_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("copyright_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("last_word_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("last_admin_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("back_cover_image")))
+
+    # Collect alias/template-style keys that may be present on stories.
+    urls_to_delete.extend(_collect_urls(story_data.get("dedication_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("copyright_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("last_words_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("last_story_page_image")))
+    urls_to_delete.extend(_collect_urls(story_data.get("story_page_images")))
+
+    # Delete audio files.
+    urls_to_delete.extend(_collect_urls(story_data.get("audio_url")))
+    urls_to_delete.extend(_collect_urls(story_data.get("audio_urls")))
+
+    # Delete PDF if exists.
+    urls_to_delete.extend(_collect_urls(story_data.get("pdf_url")))
     
     # Character images (only delete if exclude_character_images is False)
     if not exclude_character_images:
@@ -144,10 +249,34 @@ def delete_story_images(supabase_client, story_data: dict, exclude_character_ima
             enhanced_images = story_data["enhanced_images"]
             if isinstance(enhanced_images, list):
                 urls_to_delete.extend([img for img in enhanced_images if img])
-    
-    logger.info(f"Deleting {len(urls_to_delete)} files for story (exclude_character_images={exclude_character_images})")
-    
-    return delete_files_from_storage(supabase_client, urls_to_delete)
+
+    # Never delete shared template assets (e.g. dedication page from book_templates).
+    protected_targets = _build_protected_storage_targets(protected_urls)
+    shared_urls = []
+    deletable_urls = []
+    for url in urls_to_delete:
+        target = _normalized_storage_target(url)
+        is_protected_shared = bool(target and target in protected_targets)
+        if _is_shared_template_asset(url) or is_protected_shared:
+            shared_urls.append(url)
+        else:
+            deletable_urls.append(url)
+
+    # Deduplicate while preserving order.
+    deduped_urls = list(dict.fromkeys(deletable_urls))
+
+    logger.info(
+        "Deleting %s files for story (exclude_character_images=%s, skipped_shared_templates=%s)",
+        len(deduped_urls),
+        exclude_character_images,
+        len(shared_urls),
+    )
+    if shared_urls:
+        logger.info("Skipped shared template assets during story cleanup: %s", len(shared_urls))
+
+    deletion_result = delete_files_from_storage(supabase_client, deduped_urls)
+    deletion_result["skipped_shared_template_assets"] = len(shared_urls)
+    return deletion_result
 
 
 def delete_character_images(supabase_client, character_data: dict) -> dict:

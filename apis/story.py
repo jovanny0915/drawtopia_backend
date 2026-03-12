@@ -277,7 +277,7 @@ async def delete_book(request: Request, id: str):
         Success message with deleted book information
     """
     import main  # Import here to avoid circular import
-    from storage_utils import delete_story_images
+    from storage_utils import delete_story_images, collect_book_template_image_urls
     
     try:
         if not main.supabase:
@@ -311,10 +311,19 @@ async def delete_book(request: Request, id: str):
         # Delete associated images from storage (exclude character images)
         main.logger.info(f"Deleting images for story {id} from storage...")
         try:
+            protected_template_urls = set()
+            try:
+                protected_template_urls = collect_book_template_image_urls(main.supabase)
+            except Exception as template_lookup_error:
+                main.logger.warning(
+                    f"Could not load shared template URLs for deletion protection: {template_lookup_error}"
+                )
+
             deletion_result = delete_story_images(
                 main.supabase, 
                 book_data, 
-                exclude_character_images=True  # Keep character image and enhancement images
+                exclude_character_images=True,  # Keep character image and enhancement images
+                protected_urls=protected_template_urls,
             )
             main.logger.info(f"Image deletion result: {deletion_result['success']} succeeded, {deletion_result['errors']} failed")
         except Exception as storage_error:

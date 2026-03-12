@@ -18,7 +18,12 @@ import os
 import logging
 from uuid import uuid4
 from image_optimizer import TemplateImageOptimizer
-from storage_utils import delete_story_images, delete_character_images, delete_files_from_storage
+from storage_utils import (
+    delete_story_images,
+    delete_character_images,
+    delete_files_from_storage,
+    collect_book_template_image_urls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -555,13 +560,22 @@ async def delete_user(request: Request, user_id: str):
         storage_files_deleted = 0
         storage_files_failed = 0
 
+        protected_template_urls: Set[str] = set()
+        try:
+            protected_template_urls = collect_book_template_image_urls(supabase)
+        except Exception as template_lookup_error:
+            logger.warning(
+                f"⚠️ Could not load shared template URLs for user-delete cleanup protection: {template_lookup_error}"
+            )
+
         for story in story_rows:
             try:
                 # Full cleanup for admin delete: include character/enhanced images too.
                 deletion_result = delete_story_images(
                     supabase,
                     story,
-                    exclude_character_images=False
+                    exclude_character_images=False,
+                    protected_urls=protected_template_urls,
                 )
                 storage_files_deleted += deletion_result.get("success", 0)
                 storage_files_failed += deletion_result.get("errors", 0)
