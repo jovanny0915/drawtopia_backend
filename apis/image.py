@@ -7,12 +7,50 @@ from pydantic import BaseModel, HttpUrl
 from typing import Optional, List, Any
 from io import BytesIO
 from datetime import datetime
+from pathlib import Path
 import uuid
 import base64
 import re
 from rate_limiter import limiter
 
 router = APIRouter()
+
+
+def _load_cover_title_font_quicksand_bold(width: int, draw) -> Any:
+    """
+    Quicksand Bold (700). TrueType size is tuned so cap height matches
+    ImageFont.load_default(width/10) — same apparent title size as before.
+    """
+    from PIL import ImageFont as PILImageFont
+
+    ref_font = PILImageFont.load_default(int(width / 10))
+    ref_bb = draw.textbbox((0, 0), "Mg", font=ref_font)
+    ref_h = max(1, ref_bb[3] - ref_bb[1])
+    fonts_dir = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+    paths = [
+        fonts_dir / "Quicksand-Bold.ttf",
+        Path("C:/Windows/Fonts/Quicksand-Bold.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Quicksand-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/quicksand/Quicksand-Bold.ttf"),
+    ]
+    for p in paths:
+        if not p.is_file():
+            continue
+        best_f = None
+        best_d = 10**9
+        for sz in range(6, min(420, int(width) + 80)):
+            try:
+                f = PILImageFont.truetype(str(p), sz)
+            except Exception:
+                continue
+            bb = draw.textbbox((0, 0), "Mg", font=f)
+            h = max(1, bb[3] - bb[1])
+            d = abs(h - ref_h)
+            if d < best_d:
+                best_d, best_f = d, f
+        if best_f is not None and best_d <= ref_h * 0.22:
+            return best_f
+    return ref_font
 
 
 class ImageRequest(BaseModel):
@@ -152,8 +190,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         image = PILImage.open(BytesIO(image_data)).convert("RGB")
         width, height = image.size
         draw = ImageDraw.Draw(image)
-        # Slightly reduce title font size from previous setting.
-        font = ImageFont.load_default(width / 10)
+        font = _load_cover_title_font_quicksand_bold(width, draw)
 
         max_text_width = int(width * 0.84)  # Keep side margins so text never exceeds cover width
 
@@ -211,21 +248,20 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 
         fill_color = "#F3E5CB"
         stroke_color = "#1C596F"
-        stroke_width = max(2, int(min(width, height) * 0.008))
+        # Main title: border 20px @ 2137px (Quicksand / CSS reference)
+        stroke_width_title = max(1, int(20 * width / 2137))
 
         # Subtitle below main title — smaller than title
         subtitle_text = (body.subtitle or "").strip() if body.subtitle else None
         subtitle_font = None
         subtitle_x = subtitle_y = 0
-        stroke_subtitle = int(stroke_width * 0.7) if stroke_width else 2
+        stroke_subtitle = max(1, int(stroke_width_title * 0.5))
 
-        # CSS-like text-shadow:
-        # 1) 0 0 100px #F3E5CB -> blurred glow layer
-        # 2) 0 15px 0 rgba(15, 10, 59, 0.5) -> vertical hard shadow
+        # text-shadow: 0 0 100px #F3E5CB, 0 15px 0 rgba(15, 10, 59, 0.5)
         glow_color_rgba = (243, 229, 203, 170)
         drop_shadow_color_rgba = (15, 10, 59, 128)
-        glow_blur_radius = max(8, int(min(width, height) * 0.03))
-        drop_shadow_offset_y = max(3, int(min(width, height) * 0.012))
+        glow_blur_radius = max(2, int(100 * width / 2137))
+        drop_shadow_offset_y = max(1, int(15 * width / 2137))
 
         text_layout = []
         current_y = y
@@ -236,7 +272,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             current_y += line_height + line_spacing
 
         if subtitle_text:
-            subtitle_font = ImageFont.load_default(int(width / 10 * 0.7))
+            subtitle_font = ImageFont.load_default(int(width / 10 * 0.5))
             sub_bbox = draw.textbbox((0, 0), subtitle_text, font=subtitle_font)
             subtitle_w = sub_bbox[2] - sub_bbox[0]
             subtitle_x = (width - subtitle_w) // 2
@@ -254,7 +290,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                 line,
                 fill=glow_color_rgba,
                 font=font,
-                stroke_width=stroke_width,
+                stroke_width=stroke_width_title,
                 stroke_fill=glow_color_rgba,
             )
             shadow_draw.text(
@@ -292,23 +328,20 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             if (dx * dx + dy * dy) <= (inner_bold_radius * inner_bold_radius)
         ]
         for line, line_x, line_y in text_layout:
-            # Draw stroke as a solid outline layer first.
             main_draw.text(
                 (line_x, line_y),
                 line,
                 fill=stroke_color,
                 font=font,
-                stroke_width=stroke_width,
+                stroke_width=stroke_width_title,
                 stroke_fill=stroke_color,
             )
-            # Then render fill multiple times with tiny offsets to make inner text thicker.
-            for dx, dy in inner_bold_offsets:
-                main_draw.text(
-                    (line_x + dx, line_y + dy),
-                    line,
-                    fill=fill_color,
-                    font=font,
-                )
+            main_draw.text(
+                (line_x, line_y),
+                line,
+                fill=fill_color,
+                font=font,
+            )
         if subtitle_text and subtitle_font is not None:
             main_draw.text(
                 (subtitle_x, subtitle_y),
