@@ -58,6 +58,7 @@ class OverlayCoverTitleRequest(BaseModel):
     image_url: HttpUrl
     title: str
     y_position: Optional[float] = 0.14
+    subtitle: Optional[str] = "A Read-Aloud Adventure"
 
 
 class OverlayCoverTitleResponse(BaseModel):
@@ -212,6 +213,12 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         stroke_color = "#1C596F"
         stroke_width = max(2, int(min(width, height) * 0.008))
 
+        # Subtitle below main title (reference: DM Sans 700, #F3E5CB, stroke #1C596F, shadow)
+        subtitle_text = (body.subtitle or "").strip() if body.subtitle else None
+        subtitle_font = None
+        subtitle_x = subtitle_y = 0
+        stroke_subtitle = max(2, int(10 * width / 2137))
+
         # CSS-like text-shadow:
         # 1) 0 0 100px #F3E5CB -> blurred glow layer
         # 2) 0 15px 0 rgba(15, 10, 59, 0.5) -> vertical hard shadow
@@ -227,6 +234,15 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             line_x = max(0, int((width - line_w) / 2))
             text_layout.append((line, line_x, current_y))
             current_y += line_height + line_spacing
+
+        if subtitle_text:
+            subtitle_font_size = max(14, min(120, int(100 * width / 2137)))
+            subtitle_font = main._get_font_for_size(subtitle_font_size)
+            sub_bbox = draw.textbbox((0, 0), subtitle_text, font=subtitle_font)
+            subtitle_w = sub_bbox[2] - sub_bbox[0]
+            subtitle_x = max(0, (width - subtitle_w) // 2)
+            subtitle_y = current_y + max(int(line_spacing * 1.5), int(height * 0.02))
+            stroke_subtitle = max(2, min(stroke_width * 2, int(10 * width / 2137)))
 
         image = image.convert("RGBA")
         glow_layer = PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -248,6 +264,21 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                 line,
                 fill=drop_shadow_color_rgba,
                 font=font,
+            )
+        if subtitle_text and subtitle_font is not None:
+            glow_draw.text(
+                (subtitle_x, subtitle_y),
+                subtitle_text,
+                fill=glow_color_rgba,
+                font=subtitle_font,
+                stroke_width=stroke_subtitle,
+                stroke_fill=glow_color_rgba,
+            )
+            shadow_draw.text(
+                (subtitle_x, subtitle_y + drop_shadow_offset_y),
+                subtitle_text,
+                fill=drop_shadow_color_rgba,
+                font=subtitle_font,
             )
 
         glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_blur_radius))
@@ -280,6 +311,21 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                     fill=fill_color,
                     font=font,
                 )
+        if subtitle_text and subtitle_font is not None:
+            main_draw.text(
+                (subtitle_x, subtitle_y),
+                subtitle_text,
+                fill=stroke_color,
+                font=subtitle_font,
+                stroke_width=stroke_subtitle,
+                stroke_fill=stroke_color,
+            )
+            main_draw.text(
+                (subtitle_x, subtitle_y),
+                subtitle_text,
+                fill=fill_color,
+                font=subtitle_font,
+            )
 
         out = BytesIO()
         image.convert("RGB").save(out, format="JPEG", quality=90, optimize=True)
