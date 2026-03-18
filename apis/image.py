@@ -213,9 +213,11 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         stroke_color = "#1C596F"
         stroke_width = max(2, int(min(width, height) * 0.008))
 
-        # Subtitle below main title — same font and stroke as title
+        # Subtitle below main title — smaller than title
         subtitle_text = (body.subtitle or "").strip() if body.subtitle else None
+        subtitle_font = None
         subtitle_x = subtitle_y = 0
+        stroke_subtitle = int(stroke_width * 0.7) if stroke_width else 2
 
         # CSS-like text-shadow:
         # 1) 0 0 100px #F3E5CB -> blurred glow layer
@@ -234,7 +236,8 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             current_y += line_height + line_spacing
 
         if subtitle_text:
-            sub_bbox = draw.textbbox((0, 0), subtitle_text, font=font)
+            subtitle_font = ImageFont.load_default(int(width / 10 * 0.7))
+            sub_bbox = draw.textbbox((0, 0), subtitle_text, font=subtitle_font)
             subtitle_w = sub_bbox[2] - sub_bbox[0]
             subtitle_x = (width - subtitle_w) // 2
             subtitle_y = current_y + int(line_spacing * 1.5)
@@ -260,20 +263,20 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                 fill=drop_shadow_color_rgba,
                 font=font,
             )
-        if subtitle_text:
+        if subtitle_text and subtitle_font is not None:
             glow_draw.text(
                 (subtitle_x, subtitle_y),
                 subtitle_text,
                 fill=glow_color_rgba,
-                font=font,
-                stroke_width=stroke_width,
+                font=subtitle_font,
+                stroke_width=stroke_subtitle,
                 stroke_fill=glow_color_rgba,
             )
             shadow_draw.text(
                 (subtitle_x, subtitle_y + drop_shadow_offset_y),
                 subtitle_text,
                 fill=drop_shadow_color_rgba,
-                font=font,
+                font=subtitle_font,
             )
 
         glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_blur_radius))
@@ -306,13 +309,13 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                     fill=fill_color,
                     font=font,
                 )
-        if subtitle_text:
+        if subtitle_text and subtitle_font is not None:
             main_draw.text(
                 (subtitle_x, subtitle_y),
                 subtitle_text,
                 fill=stroke_color,
-                font=font,
-                stroke_width=stroke_width,
+                font=subtitle_font,
+                stroke_width=stroke_subtitle,
                 stroke_fill=stroke_color,
             )
             for dx, dy in inner_bold_offsets:
@@ -320,7 +323,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                     (subtitle_x + dx, subtitle_y + dy),
                     subtitle_text,
                     fill=fill_color,
-                    font=font,
+                    font=subtitle_font,
                 )
 
         out = BytesIO()
