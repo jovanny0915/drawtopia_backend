@@ -255,7 +255,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         subtitle_text = (body.subtitle or "").strip() if body.subtitle else None
         subtitle_font = None
         subtitle_x = subtitle_y = 0
-        stroke_subtitle = max(1, int(stroke_width_title * 0.5))
+        stroke_subtitle = max(2, int(stroke_width_title * 0.9))
 
         # text-shadow: 0 0 100px #F3E5CB, 0 15px 0 rgba(15, 10, 59, 0.5)
         glow_color_rgba = (243, 229, 203, 170)
@@ -272,7 +272,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             current_y += line_height + line_spacing
 
         if subtitle_text:
-            subtitle_font = ImageFont.load_default(int(width / 10 * 0.5))
+            subtitle_font = ImageFont.load_default(max(1, int(width / 10 * 0.38)))
             sub_bbox = draw.textbbox((0, 0), subtitle_text, font=subtitle_font)
             subtitle_w = sub_bbox[2] - sub_bbox[0]
             subtitle_x = (width - subtitle_w) // 2
