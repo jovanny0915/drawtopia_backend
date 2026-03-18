@@ -16,10 +16,22 @@ from rate_limiter import limiter
 router = APIRouter()
 
 
+def _apply_quicksand_bold_weight(font) -> None:
+    """Quicksand variable font: axis Weight 300–700; use max weight for bold."""
+    try:
+        font.set_variation_by_axes([700])
+    except Exception:
+        try:
+            font.set_variation_by_name("Bold")
+        except Exception:
+            pass
+
+
 def _load_cover_title_font_quicksand_bold(width: int, draw) -> Any:
     """
     Quicksand Bold (700). TrueType size is tuned so cap height matches
     ImageFont.load_default(width/10) — same apparent title size as before.
+    Bundled: assets/fonts/Quicksand-Bold.ttf (Google Fonts OFL; often variable font).
     """
     from PIL import ImageFont as PILImageFont
 
@@ -29,6 +41,7 @@ def _load_cover_title_font_quicksand_bold(width: int, draw) -> Any:
     fonts_dir = Path(__file__).resolve().parent.parent / "assets" / "fonts"
     paths = [
         fonts_dir / "Quicksand-Bold.ttf",
+        fonts_dir / "Quicksand-Variable.ttf",
         Path("C:/Windows/Fonts/Quicksand-Bold.ttf"),
         Path("/System/Library/Fonts/Supplemental/Quicksand-Bold.ttf"),
         Path("/usr/share/fonts/truetype/quicksand/Quicksand-Bold.ttf"),
@@ -41,6 +54,7 @@ def _load_cover_title_font_quicksand_bold(width: int, draw) -> Any:
         for sz in range(6, min(420, int(width) + 80)):
             try:
                 f = PILImageFont.truetype(str(p), sz)
+                _apply_quicksand_bold_weight(f)
             except Exception:
                 continue
             bb = draw.textbbox((0, 0), "Mg", font=f)
@@ -249,7 +263,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         fill_color = "#F3E5CB"
         stroke_color = "#1C596F"
         # Main title: border 20px @ 2137px (Quicksand / CSS reference)
-        stroke_width_title = max(1, int(20 * width / 2137))
+        stroke_width_title = max(2, int(24 * width / 2137))
 
         # Subtitle below main title — smaller than title
         subtitle_text = (body.subtitle or "").strip() if body.subtitle else None
@@ -327,6 +341,13 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             for dy in range(-inner_bold_radius, inner_bold_radius + 1)
             if (dx * dx + dy * dy) <= (inner_bold_radius * inner_bold_radius)
         ]
+        title_fill_radius = max(2, min(5, int(min(width, height) * 0.0032)))
+        title_fill_offsets = [
+            (dx, dy)
+            for dx in range(-title_fill_radius, title_fill_radius + 1)
+            for dy in range(-title_fill_radius, title_fill_radius + 1)
+            if (dx * dx + dy * dy) <= (title_fill_radius * title_fill_radius)
+        ]
         for line, line_x, line_y in text_layout:
             main_draw.text(
                 (line_x, line_y),
@@ -342,6 +363,13 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
                 fill=fill_color,
                 font=font,
             )
+            for dx, dy in title_fill_offsets:
+                main_draw.text(
+                    (line_x + dx, line_y + dy),
+                    line,
+                    fill=fill_color,
+                    font=font,
+                )
         if subtitle_text and subtitle_font is not None:
             main_draw.text(
                 (subtitle_x, subtitle_y),
