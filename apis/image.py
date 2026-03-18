@@ -236,14 +236,15 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
             current_y += line_height + line_spacing
 
         if subtitle_text:
-            # 2× reference scale (was 100px at 2137px width)
-            subtitle_font_size = max(28, min(240, int(200 * width / 2137)))
+            # Match main title size (title uses width/10) then reduce a little (~90%)
+            title_effective_size = max(10, int(width / 10))
+            subtitle_font_size = max(14, int(title_effective_size * 0.9))
             subtitle_font = main._get_font_for_size(subtitle_font_size)
             sub_bbox = draw.textbbox((0, 0), subtitle_text, font=subtitle_font)
             subtitle_w = sub_bbox[2] - sub_bbox[0]
             subtitle_x = max(0, (width - subtitle_w) // 2)
             subtitle_y = current_y + max(int(line_spacing * 1.5), int(height * 0.02))
-            stroke_subtitle = max(3, min(stroke_width * 3, int(20 * width / 2137)))
+            stroke_subtitle = max(2, min(stroke_width * 2, int(10 * width / 2137)))
 
         image = image.convert("RGBA")
         glow_layer = PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
