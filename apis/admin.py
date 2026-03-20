@@ -353,7 +353,11 @@ async def get_templates(request: Request):
 @limiter.limit("60/minute")
 async def get_random_template_by_story_world(
     request: Request,
-    story_world: str = Query(..., description="Story world: forest, underwater, or outerspace")
+    story_world: str = Query(..., description="Story world: forest, underwater, or outerspace"),
+    story_style: Optional[str] = Query(
+        None,
+        description="Optional story style to match exactly (e.g. cartoon, anime, 3d)"
+    ),
 ):
     """Get one random template by story world (public endpoint for cover generation)."""
     supabase = get_supabase_client()
@@ -367,17 +371,29 @@ async def get_random_template_by_story_world(
         )
 
     try:
-        response = (
+        query = (
             supabase
             .table("book_templates")
             .select("*")
             .eq("story_world", normalized_world)
             .not_.is_("cover_image", "null")
-            .execute()
         )
+        normalized_style = (story_style or "").strip().lower()
+        if normalized_style:
+            query = query.eq("story_style", normalized_style)
+
+        response = query.execute()
 
         templates = response.data or []
         if len(templates) == 0:
+            if normalized_style:
+                return {
+                    "success": False,
+                    "error": (
+                        "No templates found for "
+                        f"story world '{normalized_world}' and story style '{normalized_style}'"
+                    )
+                }
             return {
                 "success": False,
                 "error": f"No templates found for story world: {normalized_world}"
