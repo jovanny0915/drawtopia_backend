@@ -105,10 +105,24 @@ def get_supabase_client():
     return main.supabase
 
 
-def sanitize_template_name(name: str) -> str:
-    """Sanitize template name for folder paths"""
-    import re
-    return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', name.lower().strip()))
+VALID_TEMPLATE_STORY_STYLES = {
+    "3d",
+    "anime",
+    "cartoon",
+    "story",
+    "search",
+    "adventure",
+    "search-and-find",
+}
+
+
+def normalize_story_style(value: Optional[str]) -> Optional[str]:
+    """Normalize story style values for consistent validation/storage."""
+    if value is None:
+        return None
+
+    normalized = value.strip().lower().replace("_", "-").replace(" ", "-")
+    return normalized or None
 
 
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
@@ -175,30 +189,6 @@ async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) 
             status_code=500,
             detail=f"Failed to upload file to storage: {str(e)}"
         )
-
-
-async def delete_folder_from_storage(bucket_name: str, folder_path: str) -> None:
-    """Delete all files in a folder from Supabase storage"""
-    supabase = get_supabase_client()
-    
-    try:
-        # List all files in the folder
-        files_response = supabase.storage.from_(bucket_name).list(folder_path)
-        
-        if files_response and len(files_response) > 0:
-            # Build file paths to delete
-            file_paths = [f"{folder_path}/{file['name']}" for file in files_response]
-            
-            # Delete all files
-            delete_response = supabase.storage.from_(bucket_name).remove(file_paths)
-            
-            logger.info(f"✅ Deleted {len(file_paths)} files from storage folder: {folder_path}")
-        else:
-            logger.info(f"ℹ️ No files found in storage folder: {folder_path}")
-            
-    except Exception as e:
-        logger.error(f"⚠️ Error deleting folder from storage: {e}")
-        # Don't raise exception - continue with template deletion even if storage cleanup fails
 
 
 def _delete_urls_or_raise(supabase_client, urls: List[str], context: str) -> None:
@@ -378,7 +368,7 @@ async def get_random_template_by_story_world(
             .eq("story_world", normalized_world)
             .not_.is_("cover_image", "null")
         )
-        normalized_style = (story_style or "").strip().lower()
+        normalized_style = normalize_story_style(story_style)
         if normalized_style:
             query = query.eq("story_style", normalized_style)
 
@@ -709,12 +699,15 @@ async def create_template(request: Request, body: BookTemplateCreate):
         )
 
     # Validate story style/type if provided
-    valid_story_styles = ['3d', 'anime', 'cartoon']
     requested_story_style = body.story_type if body.story_type is not None else body.story_style
-    if requested_story_style and requested_story_style not in valid_story_styles:
+    requested_story_style = normalize_story_style(requested_story_style)
+    if requested_story_style and requested_story_style not in VALID_TEMPLATE_STORY_STYLES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid story_style. Must be one of: {', '.join(valid_story_styles)}"
+            detail=(
+                "Invalid story_style. Must be one of: "
+                f"{', '.join(sorted(VALID_TEMPLATE_STORY_STYLES))}"
+            )
         )
     
     try:
@@ -751,18 +744,38 @@ async def delete_template(request: Request, template_id: str):
     supabase = get_supabase_client()
     
     try:
-        # Get template to get its name for storage deletion
-        response = supabase.table("book_templates").select("name").eq("id", template_id).single().execute()
+        # Load template and delete only assets referenced by this row.
+        # This prevents cross-template deletion when names are duplicated.
+        response = (
+            supabase
+            .table("book_templates")
+            .select(
+                "name,cover_image,copyright_page_image,dedication_page_image,"
+                "story_page_images,last_words_page_image,last_story_page_image,back_cover_image"
+            )
+            .eq("id", template_id)
+            .single()
+            .execute()
+        )
         
         if not response.data:
             raise HTTPException(status_code=404, detail="Template not found")
         
-        template_name = response.data["name"]
-        sanitized_name = sanitize_template_name(template_name)
-        folder_path = f"book-templates/{sanitized_name}"
-        
-        # Delete files from storage bucket
-        await delete_folder_from_storage("book-images", folder_path)
+        template_data = response.data
+        template_name = template_data["name"]
+        urls_to_delete = [
+            template_data.get("cover_image"),
+            template_data.get("copyright_page_image"),
+            template_data.get("dedication_page_image"),
+            template_data.get("last_words_page_image"),
+            template_data.get("last_story_page_image"),
+            template_data.get("back_cover_image"),
+        ]
+        story_page_images = template_data.get("story_page_images") or []
+        if isinstance(story_page_images, list):
+            urls_to_delete.extend(story_page_images)
+
+        _delete_urls_or_raise(supabase, urls_to_delete, f"template {template_id}")
         
         # Delete template from database
         delete_response = supabase.table("book_templates").delete().eq("id", template_id).execute()
@@ -788,7 +801,6 @@ async def upload_template_image(
     template_id: str,
     file: UploadFile = File(...),
     field_key: str = Form(...),
-    template_name: str = Form(...)
 ):
     """
     Upload a single image for a book template field.
@@ -798,7 +810,6 @@ async def upload_template_image(
         template_id: ID of the template
         file: Image file to upload (will be optimized to WebP)
         field_key: Database field name (cover_image, back_cover_image)
-        template_name: Name of the template (for folder path)
     
     Returns:
         JSON with success status, updated template data, and optimized image URL
@@ -825,10 +836,9 @@ async def upload_template_image(
         raise HTTPException(status_code=400, detail="File must be an image")
     
     try:
-        # Build storage path (extension will be updated by optimizer to .webp)
-        sanitized_name = sanitize_template_name(template_name)
+        # Use template UUID in storage path to avoid collisions.
         file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-        file_path = f"book-templates/{sanitized_name}/{field_key}.{file_ext}"
+        file_path = f"book-templates/{template_id}/{field_key}.{file_ext}"
         
         # Upload to storage (will be optimized to WebP automatically)
         public_url = await upload_to_storage(file, "book-images", file_path)
@@ -840,7 +850,7 @@ async def upload_template_image(
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update template in database")
         
-        logger.info(f"✅ Uploaded {field_key} for template: {template_name}")
+        logger.info(f"✅ Uploaded {field_key} for template ID: {template_id}")
         
         return {
             "success": True,
@@ -863,7 +873,6 @@ async def upload_single_story_page(
     request: Request,
     template_id: str,
     file: UploadFile = File(...),
-    template_name: str = Form(...),
     page_index: int = Form(...)  # Index position for this page (0-based)
 ):
     """
@@ -874,7 +883,6 @@ async def upload_single_story_page(
     Args:
         template_id: ID of the template
         file: Single image file to upload (will be optimized to WebP)
-        template_name: Name of the template (for folder path)
         page_index: Index position for this page in the story_page_images array (0-based)
     
     Returns:
@@ -895,10 +903,9 @@ async def upload_single_story_page(
         
         existing_urls = template_response.data.get("story_page_images") or []
         
-        # Upload new file (will be optimized to WebP automatically)
-        sanitized_name = sanitize_template_name(template_name)
+        # Use template UUID in storage path to avoid collisions.
         file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-        file_path = f"book-templates/{sanitized_name}/story-page-{page_index + 1}.{file_ext}"
+        file_path = f"book-templates/{template_id}/story-page-{page_index + 1}.{file_ext}"
         
         # Upload to storage (with automatic optimization)
         public_url = await upload_to_storage(file, "book-images", file_path)
@@ -924,7 +931,7 @@ async def upload_single_story_page(
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update template in database")
         
-        logger.info(f"✅ Uploaded story page {page_index + 1} for template: {template_name}")
+        logger.info(f"✅ Uploaded story page {page_index + 1} for template ID: {template_id}")
         
         return {
             "success": True,
@@ -949,7 +956,6 @@ async def upload_story_pages(
     request: Request,
     template_id: str,
     files: List[UploadFile] = File(...),
-    template_name: str = Form(...),
     existing_images: str = Form(default="[]")  # JSON string of existing image URLs
 ):
     """
@@ -962,7 +968,6 @@ async def upload_story_pages(
     Args:
         template_id: ID of the template
         files: List of image files to upload (will be optimized to WebP)
-        template_name: Name of the template (for folder path)
         existing_images: JSON string array of existing image URLs to preserve
     
     Returns:
@@ -982,14 +987,13 @@ async def upload_story_pages(
             if not file.content_type or not file.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not an image")
         
-        # Upload new files (will be optimized to WebP automatically)
-        sanitized_name = sanitize_template_name(template_name)
+        # Use template UUID in storage path to avoid collisions.
         new_urls = []
         
         for idx, file in enumerate(files):
             current_index = len(existing_urls) + idx
             file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-            file_path = f"book-templates/{sanitized_name}/story-page-{current_index + 1}.{file_ext}"
+            file_path = f"book-templates/{template_id}/story-page-{current_index + 1}.{file_ext}"
             
             # Upload to storage (with automatic optimization)
             public_url = await upload_to_storage(file, "book-images", file_path)
@@ -1006,7 +1010,7 @@ async def upload_story_pages(
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update template in database")
         
-        logger.info(f"✅ Uploaded {len(new_urls)} story pages for template: {template_name}")
+        logger.info(f"✅ Uploaded {len(new_urls)} story pages for template ID: {template_id}")
         
         return {
             "success": True,
@@ -1188,13 +1192,16 @@ async def update_template(
         story_type_field_provided = "story_type" in provided_fields
         story_style_field_provided = "story_style" in provided_fields
         requested_story_style = body.story_type if story_type_field_provided else body.story_style
+        requested_story_style = normalize_story_style(requested_story_style)
         if (story_type_field_provided or story_style_field_provided) and requested_story_style is not None:
-            valid_story_styles = ['3d', 'anime', 'cartoon']
             # Empty string means clear the story_style
-            if requested_story_style and requested_story_style not in valid_story_styles:
+            if requested_story_style and requested_story_style not in VALID_TEMPLATE_STORY_STYLES:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid story_style. Must be one of: {', '.join(valid_story_styles)}"
+                    detail=(
+                        "Invalid story_style. Must be one of: "
+                        f"{', '.join(sorted(VALID_TEMPLATE_STORY_STYLES))}"
+                    )
                 )
         
         # Build update data from non-None fields
