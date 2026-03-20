@@ -39,12 +39,16 @@ class BookTemplateCreate(BaseModel):
     """Request model for creating a new book template"""
     name: str
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
+    story_style: Optional[str] = None  # '3d', 'anime', or 'cartoon'
+    story_type: Optional[str] = None   # alias for story_style
 
 
 class BookTemplateUpdate(BaseModel):
     """Request model for updating book template metadata"""
     name: Optional[str] = None
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
+    story_style: Optional[str] = None  # '3d', 'anime', or 'cartoon'
+    story_type: Optional[str] = None   # alias for story_style
     cover_image: Optional[str] = None
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
@@ -59,6 +63,8 @@ class BookTemplateResponse(BaseModel):
     id: str
     name: str
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
+    story_style: Optional[str] = None  # '3d', 'anime', or 'cartoon'
+    story_type: Optional[str] = None   # alias for story_style
     cover_image: Optional[str] = None
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
@@ -685,18 +691,32 @@ async def create_template(request: Request, body: BookTemplateCreate):
             status_code=400, 
             detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
         )
+
+    # Validate story style/type if provided
+    valid_story_styles = ['3d', 'anime', 'cartoon']
+    requested_story_style = body.story_type if body.story_type is not None else body.story_style
+    if requested_story_style and requested_story_style not in valid_story_styles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid story_style. Must be one of: {', '.join(valid_story_styles)}"
+        )
     
     try:
         insert_data = {"name": body.name.strip()}
         if body.story_world:
             insert_data["story_world"] = body.story_world
+        if requested_story_style:
+            insert_data["story_style"] = requested_story_style
         
         response = supabase.table("book_templates").insert(insert_data).execute()
         
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create template")
         
-        logger.info(f"✅ Created template: {body.name} (story_world: {body.story_world or 'none'})")
+        logger.info(
+            f"✅ Created template: {body.name} "
+            f"(story_world: {body.story_world or 'none'}, story_style: {requested_story_style or 'none'})"
+        )
         
         return {
             "success": True,
@@ -1147,6 +1167,19 @@ async def update_template(
                     status_code=400, 
                     detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
                 )
+
+        # Validate story style/type if provided
+        story_type_field_provided = "story_type" in provided_fields
+        story_style_field_provided = "story_style" in provided_fields
+        requested_story_style = body.story_type if story_type_field_provided else body.story_style
+        if (story_type_field_provided or story_style_field_provided) and requested_story_style is not None:
+            valid_story_styles = ['3d', 'anime', 'cartoon']
+            # Empty string means clear the story_style
+            if requested_story_style and requested_story_style not in valid_story_styles:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid story_style. Must be one of: {', '.join(valid_story_styles)}"
+                )
         
         # Build update data from non-None fields
         update_data = {}
@@ -1155,6 +1188,9 @@ async def update_template(
         if "story_world" in provided_fields:
             # Empty string or null means clear the field
             update_data["story_world"] = body.story_world if body.story_world else None
+        if story_type_field_provided or story_style_field_provided:
+            # Empty string or null means clear the field
+            update_data["story_style"] = requested_story_style if requested_story_style else None
         if "cover_image" in provided_fields:
             update_data["cover_image"] = body.cover_image
         if "story_page_images" in provided_fields:
