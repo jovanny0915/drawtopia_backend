@@ -307,6 +307,8 @@ async def delete_book(request: Request, id: str):
         book_data = story_response.data[0]
         book_id = book_data.get("id")
         book_uid = book_data.get("uid")
+        character_id = book_data.get("character_id")
+        book_user_id = book_data.get("user_id")
         
         # Delete associated images from storage (exclude character images)
         main.logger.info(f"Deleting images for story {id} from storage...")
@@ -342,6 +344,33 @@ async def delete_book(request: Request, id: str):
             )
         
         main.logger.info(f"Deleted book with id={id} (db_id={book_id}, uid={book_uid})")
+
+        # Delete related character row if this story has one
+        deleted_character = False
+        if character_id:
+            try:
+                delete_character_query = main.supabase.table("characters").delete().eq("id", character_id)
+                if book_user_id:
+                    delete_character_query = delete_character_query.eq("user_id", book_user_id)
+
+                delete_character_response = delete_character_query.execute()
+                deleted_character = bool(delete_character_response.data and len(delete_character_response.data) > 0)
+
+                if deleted_character:
+                    main.logger.info(
+                        f"Deleted related character id={character_id} for story id={book_id or book_uid}"
+                    )
+                else:
+                    main.logger.warning(
+                        f"No related character deleted for story id={book_id or book_uid}; "
+                        f"character_id={character_id} may not exist or may already be deleted"
+                    )
+            except Exception as character_delete_error:
+                # Log but do not fail story deletion if related character cleanup fails
+                main.logger.error(
+                    f"Failed to delete related character {character_id} for story id={book_id or book_uid}: "
+                    f"{character_delete_error}"
+                )
         
         return {
             "success": True,
@@ -350,7 +379,9 @@ async def delete_book(request: Request, id: str):
                 "id": book_id,
                 "uid": book_uid,
                 "title": book_data.get("story_title", "Unknown")
-            }
+            },
+            "deleted_related_character": deleted_character,
+            "deleted_character_id": character_id if deleted_character else None,
         }
         
     except HTTPException as e:
