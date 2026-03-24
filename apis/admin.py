@@ -348,6 +348,13 @@ async def get_random_template_by_story_world(
         None,
         description="Optional story style to match exactly (e.g. cartoon, anime, 3d)"
     ),
+    for_dedication: bool = Query(
+        False,
+        description=(
+            "When true, only templates with dedication_page_image set are returned "
+            "(e.g. dedication page preview)."
+        ),
+    ),
 ):
     """Get one random template by story world (public endpoint for cover generation)."""
     supabase = get_supabase_client()
@@ -366,8 +373,11 @@ async def get_random_template_by_story_world(
             .table("book_templates")
             .select("*")
             .eq("story_world", normalized_world)
-            .not_.is_("cover_image", "null")
         )
+        if for_dedication:
+            query = query.not_.is_("dedication_page_image", "null")
+        else:
+            query = query.not_.is_("cover_image", "null")
         normalized_style = normalize_story_style(story_style)
         if normalized_style:
             query = query.eq("story_style", normalized_style)
@@ -376,17 +386,20 @@ async def get_random_template_by_story_world(
 
         templates = response.data or []
         if len(templates) == 0:
+            scope = "dedication page" if for_dedication else "cover"
             if normalized_style:
                 return {
                     "success": False,
                     "error": (
-                        "No templates found for "
+                        f"No templates found for {scope} with "
                         f"story world '{normalized_world}' and story style '{normalized_style}'"
                     )
                 }
             return {
                 "success": False,
-                "error": f"No templates found for story world: {normalized_world}"
+                "error": (
+                    f"No templates found for {scope} with story world: {normalized_world}"
+                ),
             }
 
         return {
