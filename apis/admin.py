@@ -396,6 +396,13 @@ async def get_random_template_by_story_world(
         None,
         description="Optional story style to match exactly (e.g. cartoon, anime, 3d)"
     ),
+    story_format: Optional[str] = Query(
+        None,
+        description=(
+            "Optional story format filter: 'adventure_story' (includes null rows) "
+            "or 'interactive_story'."
+        ),
+    ),
     for_dedication: bool = Query(
         False,
         description=(
@@ -416,6 +423,16 @@ async def get_random_template_by_story_world(
         )
 
     try:
+        normalized_format = normalize_book_template_story_format(story_format)
+        if normalized_format and normalized_format not in VALID_BOOK_TEMPLATE_STORY_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid story_format query. Use 'adventure_story', 'interactive_story', "
+                    "or omit it."
+                ),
+            )
+
         query = (
             supabase
             .table("book_templates")
@@ -429,6 +446,11 @@ async def get_random_template_by_story_world(
         normalized_style = normalize_story_style(story_style)
         if normalized_style:
             query = query.eq("story_style", normalized_style)
+        if normalized_format == "adventure_story":
+            # Legacy rows with null story_format should still be considered adventure templates.
+            query = query.or_("story_format.eq.adventure_story,story_format.is.null")
+        elif normalized_format == "interactive_story":
+            query = query.eq("story_format", "interactive_story")
 
         response = query.execute()
 
@@ -436,12 +458,23 @@ async def get_random_template_by_story_world(
         if len(templates) == 0:
             scope = "dedication page" if for_dedication else "cover"
             if normalized_style:
+                format_scope = (
+                    f" and story format '{normalized_format}'" if normalized_format else ""
+                )
                 return {
                     "success": False,
                     "error": (
                         f"No templates found for {scope} with "
-                        f"story world '{normalized_world}' and story style '{normalized_style}'"
+                        f"story world '{normalized_world}' and story style '{normalized_style}'{format_scope}"
                     )
+                }
+            if normalized_format:
+                return {
+                    "success": False,
+                    "error": (
+                        f"No templates found for {scope} with "
+                        f"story world '{normalized_world}' and story format '{normalized_format}'"
+                    ),
                 }
             return {
                 "success": False,
