@@ -41,6 +41,7 @@ class BookTemplateCreate(BaseModel):
     story_world: Optional[str] = None  # 'forest', 'underwater', or 'outerspace'
     story_style: Optional[str] = None  # '3d', 'anime', or 'cartoon'
     story_type: Optional[str] = None   # alias for story_style
+    story_format: Optional[str] = None  # e.g. adventure_story, interactive_story; free-form text
 
 
 class BookTemplateUpdate(BaseModel):
@@ -56,6 +57,7 @@ class BookTemplateUpdate(BaseModel):
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
+    story_format: Optional[str] = None  # e.g. adventure_story, interactive_story; free-form text
 
 
 class BookTemplateResponse(BaseModel):
@@ -72,6 +74,7 @@ class BookTemplateResponse(BaseModel):
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
+    story_format: Optional[str] = None  # e.g. adventure_story, interactive_story; free-form text
     created_at: Optional[str] = None
 
 
@@ -114,6 +117,23 @@ VALID_TEMPLATE_STORY_STYLES = {
     "adventure",
     "search-and-find",
 }
+
+# Book product line: adventure (linear) vs interactive; stored on book_templates.story_format
+VALID_BOOK_TEMPLATE_STORY_FORMATS = frozenset({"adventure_story", "interactive_story"})
+
+
+def normalize_book_template_story_format(value: Optional[str]) -> Optional[str]:
+    """Return canonical story_format or None if empty."""
+    if value is None:
+        return None
+    s = value.strip().lower().replace("-", "_")
+    return s or None
+
+
+def effective_template_story_format(row_story_format: Optional[str]) -> str:
+    """DB null/empty is treated as adventure_story for legacy rows."""
+    n = normalize_book_template_story_format(row_story_format)
+    return n if n in VALID_BOOK_TEMPLATE_STORY_FORMATS else "adventure_story"
 
 
 def normalize_story_style(value: Optional[str]) -> Optional[str]:
@@ -322,18 +342,46 @@ async def get_user_auth_counts_by_day(request: Request, days: int = Query(90, ge
 
 @router.get("/admin/templates")
 @limiter.limit("30/minute")
-async def get_templates(request: Request):
-    """Get all book templates"""
+async def get_templates(
+    request: Request,
+    story_format: Optional[str] = Query(
+        None,
+        description=(
+            "Filter templates: 'adventure_story' (includes rows with null story_format), "
+            "'interactive_story', or omit for all templates."
+        ),
+    ),
+):
+    """Get book templates, optionally filtered by story_format."""
     supabase = get_supabase_client()
-    
+
     try:
-        response = supabase.table("book_templates").select("*").order("created_at", desc=True).execute()
-        
+        query = supabase.table("book_templates").select("*")
+        fmt = normalize_book_template_story_format(story_format)
+        if fmt is not None:
+            if fmt not in VALID_BOOK_TEMPLATE_STORY_FORMATS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid story_format query. Use 'adventure_story', 'interactive_story', "
+                        "or omit the parameter."
+                    ),
+                )
+            if fmt == "adventure_story":
+                # Legacy rows have NULL story_format; treat them as adventure.
+                query = query.or_("story_format.eq.adventure_story,story_format.is.null")
+            else:
+                query = query.eq("story_format", "interactive_story")
+
+        response = query.order("created_at", desc=True).execute()
+
         return {
             "success": True,
-            "data": response.data
+            "data": response.data,
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error fetching templates: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
@@ -729,7 +777,20 @@ async def create_template(request: Request, body: BookTemplateCreate):
             insert_data["story_world"] = body.story_world
         if requested_story_style:
             insert_data["story_style"] = requested_story_style
-        
+
+        raw_format = normalize_book_template_story_format(body.story_format)
+        if not raw_format:
+            raw_format = "adventure_story"
+        if raw_format not in VALID_BOOK_TEMPLATE_STORY_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid story_format. Must be one of: "
+                    f"{', '.join(sorted(VALID_BOOK_TEMPLATE_STORY_FORMATS))}"
+                ),
+            )
+        insert_data["story_format"] = raw_format
+
         response = supabase.table("book_templates").insert(insert_data).execute()
         
         if not response.data or len(response.data) == 0:
@@ -737,7 +798,8 @@ async def create_template(request: Request, body: BookTemplateCreate):
         
         logger.info(
             f"✅ Created template: {body.name} "
-            f"(story_world: {body.story_world or 'none'}, story_style: {requested_story_style or 'none'})"
+            f"(story_world: {body.story_world or 'none'}, story_style: {requested_story_style or 'none'}, "
+            f"story_format: {raw_format})"
         )
         
         return {
@@ -752,10 +814,20 @@ async def create_template(request: Request, body: BookTemplateCreate):
 
 @router.delete("/admin/templates/{template_id}")
 @limiter.limit("10/minute")
-async def delete_template(request: Request, template_id: str):
+async def delete_template(
+    request: Request,
+    template_id: str,
+    story_format: Optional[str] = Query(
+        None,
+        description=(
+            "When set, delete only if the template's story_format matches "
+            "(null counts as adventure_story). Prevents deleting the wrong list in the admin UI."
+        ),
+    ),
+):
     """Delete a book template and all associated images from storage"""
     supabase = get_supabase_client()
-    
+
     try:
         # Load template and delete only assets referenced by this row.
         # This prevents cross-template deletion when names are duplicated.
@@ -763,16 +835,33 @@ async def delete_template(request: Request, template_id: str):
             supabase
             .table("book_templates")
             .select(
-                "name,cover_image,copyright_page_image,dedication_page_image,"
+                "name,story_format,cover_image,copyright_page_image,dedication_page_image,"
                 "story_page_images,last_words_page_image,last_story_page_image,back_cover_image"
             )
             .eq("id", template_id)
             .single()
             .execute()
         )
-        
+
         if not response.data:
             raise HTTPException(status_code=404, detail="Template not found")
+
+        expected_fmt = normalize_book_template_story_format(story_format)
+        if expected_fmt is not None:
+            if expected_fmt not in VALID_BOOK_TEMPLATE_STORY_FORMATS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid story_format query for delete.",
+                )
+            actual = effective_template_story_format(response.data.get("story_format"))
+            if actual != expected_fmt:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Template story_format does not match the requested filter. "
+                        "Refresh the list and try again."
+                    ),
+                )
         
         template_data = response.data
         template_name = template_data["name"]
@@ -1227,6 +1316,20 @@ async def update_template(
         if story_type_field_provided or story_style_field_provided:
             # Empty string or null means clear the field
             update_data["story_style"] = requested_story_style if requested_story_style else None
+        if "story_format" in provided_fields:
+            raw_sf = normalize_book_template_story_format(body.story_format)
+            if raw_sf is None:
+                update_data["story_format"] = None
+            elif raw_sf not in VALID_BOOK_TEMPLATE_STORY_FORMATS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid story_format. Must be one of: "
+                        f"{', '.join(sorted(VALID_BOOK_TEMPLATE_STORY_FORMATS))}"
+                    ),
+                )
+            else:
+                update_data["story_format"] = raw_sf
         if "cover_image" in provided_fields:
             update_data["cover_image"] = body.cover_image
         if "story_page_images" in provided_fields:
