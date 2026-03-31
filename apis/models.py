@@ -174,6 +174,8 @@ class BookTemplateUpdate(BaseModel):
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
+    main_character_images: Optional[List[str]] = None
+    last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
 
@@ -187,6 +189,8 @@ class BookTemplateResponse(BaseModel):
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
+    main_character_images: Optional[List[str]] = None
+    last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
     created_at: Optional[str] = None
