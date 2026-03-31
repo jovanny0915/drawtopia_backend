@@ -1,7 +1,7 @@
 """
 Image API routes
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List, Any
@@ -14,6 +14,56 @@ import re
 from rate_limiter import limiter
 
 router = APIRouter()
+
+
+def _composite_character_on_background(
+    background_bytes: bytes,
+    character_bytes: bytes,
+    *,
+    x: int,
+    y: int,
+    max_character_height_ratio: float = 0.72,
+    max_character_width_ratio: float = 0.62,
+    bottom_margin_ratio: float = 0.04
+) -> bytes:
+    """
+    Composite a character image onto a background image.
+    Returns WebP bytes.
+    """
+    from PIL import Image as PILImage
+
+    bg = PILImage.open(BytesIO(background_bytes)).convert("RGBA")
+    ch = PILImage.open(BytesIO(character_bytes)).convert("RGBA")
+
+    bg_w, bg_h = bg.size
+    if bg_w <= 0 or bg_h <= 0:
+        raise ValueError("Invalid background image dimensions")
+
+    max_h = max(1, int(bg_h * max_character_height_ratio))
+    max_w = max(1, int(bg_w * max_character_width_ratio))
+
+    ch_w, ch_h = ch.size
+    if ch_w <= 0 or ch_h <= 0:
+        raise ValueError("Invalid character image dimensions")
+
+    scale = min(max_w / ch_w, max_h / ch_h, 1.0)
+    new_size = (max(1, int(ch_w * scale)), max(1, int(ch_h * scale)))
+    if new_size != ch.size:
+        ch = ch.resize(new_size, PILImage.Resampling.LANCZOS)
+
+    # Place character at requested pixel coordinate (top-left), clamped within background bounds.
+    # Keep optional bottom_margin_ratio for backward compatibility if callers want to pass it,
+    # but placement is driven by (x, y).
+    _ = bottom_margin_ratio
+    x = max(0, min(int(x), max(0, bg_w - ch.size[0])))
+    y = max(0, min(int(y), max(0, bg_h - ch.size[1])))
+
+    canvas = bg.copy()
+    canvas.paste(ch, (x, y), ch)
+
+    out = BytesIO()
+    canvas.save(out, format="WEBP", quality=92, method=6)
+    return out.getvalue()
 
 
 def _apply_quicksand_bold_weight(font) -> None:
@@ -409,6 +459,49 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
     except Exception as e:
         main.logger.error(f"Error in overlay_cover_title_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/embed-character-on-background")
+@limiter.limit("30/minute")
+async def embed_character_on_background_endpoint(
+    request: Request,
+    background_image: UploadFile = File(...),
+    character_image: UploadFile = File(...),
+    x: int = Form(...),
+    y: int = Form(...),
+    max_character_height_ratio: float = Form(0.72),
+    max_character_width_ratio: float = Form(0.62),
+    bottom_margin_ratio: float = Form(0.04),
+):
+    """
+    Inputs: two images (background + character) + pixel coordinates (x, y).
+    Output: a single embedded image (character composited onto background) as WebP.
+    """
+    if not background_image.content_type or not background_image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="background_image must be an image")
+    if not character_image.content_type or not character_image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="character_image must be an image")
+
+    try:
+        bg_bytes = await background_image.read()
+        ch_bytes = await character_image.read()
+        if not bg_bytes or not ch_bytes:
+            raise HTTPException(status_code=400, detail="Both images must be non-empty")
+
+        result_bytes = _composite_character_on_background(
+            bg_bytes,
+            ch_bytes,
+            x=x,
+            y=y,
+            max_character_height_ratio=max_character_height_ratio,
+            max_character_width_ratio=max_character_width_ratio,
+            bottom_margin_ratio=bottom_margin_ratio,
+        )
+        return StreamingResponse(BytesIO(result_bytes), media_type="image/webp")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to embed character on background: {str(e)}")
 
 
 @router.post("/validate-image-quality/")
