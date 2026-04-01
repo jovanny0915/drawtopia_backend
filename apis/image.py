@@ -52,7 +52,7 @@ def _composite_character_on_background(
         raise ValueError("Invalid character image dimensions")
 
     # Composite using alpha channel (IMPORTANT)
-    background.paste(character, (x/bg_w, y/bg_h), character)
+    background.paste(character, (x, y), character)
 
     # Save final image as WebP
     out = BytesIO()
