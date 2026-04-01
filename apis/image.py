@@ -33,45 +33,24 @@ def _composite_character_on_background(
     """
     from PIL import Image as PILImage
 
-    bg = PILImage.open(BytesIO(background_bytes)).convert("RGBA")
-    ch = PILImage.open(BytesIO(character_bytes)).convert("RGBA")
+    # Load images and convert to RGBA for transparency support
+    background = PILImage.open(BytesIO(background_bytes)).convert("RGBA")
+    character = PILImage.open(BytesIO(character_bytes)).convert("RGBA")
 
-    bg_w, bg_h = bg.size
+    bg_w, bg_h = background.size
     if bg_w <= 0 or bg_h <= 0:
         raise ValueError("Invalid background image dimensions")
 
-    max_h = max(1, int(bg_h * max_character_height_ratio))
-    max_w = max(1, int(bg_w * max_character_width_ratio))
-
-    ch_w, ch_h = ch.size
+    ch_w, ch_h = character.size
     if ch_w <= 0 or ch_h <= 0:
         raise ValueError("Invalid character image dimensions")
 
-    # Calculate base scale constrained by max dimensions
-    base_scale = min(max_w / ch_w, max_h / ch_h, 1.0)
-    # Apply user-provided scale parameter
-    final_scale = base_scale * scale
-    # Ensure height and width are equal by using the same scale factor
-    new_size = (max(1, int(ch_w * final_scale)), max(1, int(ch_h * final_scale)))
-    if new_size != ch.size:
-        ch = ch.resize(new_size, PILImage.Resampling.LANCZOS)
+    # Composite using alpha channel (IMPORTANT)
+    background.paste(character, (x, y), character)
 
-    # Place character at requested pixel coordinate (top-left), clamped within background bounds.
-    # Keep optional bottom_margin_ratio for backward compatibility if callers want to pass it,
-    # but placement is driven by (x, y).
-    _ = bottom_margin_ratio
-    x = max(0, min(int(x), max(0, bg_w - ch.size[0])))
-    y = max(0, min(int(y), max(0, bg_h - ch.size[1])))
-
-    canvas = bg.copy()
-    # Use alpha_composite for proper transparency blending instead of paste
-    # This ensures the character's alpha channel is properly composited over the background
-    temp = PILImage.new("RGBA", bg.size, (0, 0, 0, 0))
-    temp.paste(ch, (x, y), ch)
-    canvas = PILImage.alpha_composite(canvas, temp)
-
+    # Save final image as WebP
     out = BytesIO()
-    canvas.save(out, format="WEBP", quality=92, method=6)
+    background.save(out, format="WEBP", quality=92, method=6)
     return out.getvalue()
 
 
