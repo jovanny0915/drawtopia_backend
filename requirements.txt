@@ -26,3 +26,4 @@ twilio>=8.0.0
 
 # Testing (for Vision API and unit tests)
 pytest>=7.0.0
+rembg
