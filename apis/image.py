@@ -22,10 +22,7 @@ def _composite_character_on_background(
     *,
     x: int,
     y: int,
-    scale: float = 1.0,
-    max_character_height_ratio: float = 0.72,
-    max_character_width_ratio: float = 0.62,
-    bottom_margin_ratio: float = 0.04
+    scale: float = 1.0
 ) -> bytes:
     """
     Composite a character image onto a background image.
@@ -464,9 +461,6 @@ async def embed_character_on_background_endpoint(
     x: int = Form(...),
     y: int = Form(...),
     scale: float = Form(1.0),
-    max_character_height_ratio: float = Form(0.72),
-    max_character_width_ratio: float = Form(0.62),
-    bottom_margin_ratio: float = Form(0.04),
 ):
     """
     Inputs: two images (background + character) + pixel coordinates (x, y).
