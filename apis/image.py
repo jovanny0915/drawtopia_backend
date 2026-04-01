@@ -22,6 +22,7 @@ def _composite_character_on_background(
     *,
     x: int,
     y: int,
+    scale: float = 1.0,
     max_character_height_ratio: float = 0.72,
     max_character_width_ratio: float = 0.62,
     bottom_margin_ratio: float = 0.04
@@ -46,8 +47,12 @@ def _composite_character_on_background(
     if ch_w <= 0 or ch_h <= 0:
         raise ValueError("Invalid character image dimensions")
 
-    scale = min(max_w / ch_w, max_h / ch_h, 1.0)
-    new_size = (max(1, int(ch_w * scale)), max(1, int(ch_h * scale)))
+    # Calculate base scale constrained by max dimensions
+    base_scale = min(max_w / ch_w, max_h / ch_h, 1.0)
+    # Apply user-provided scale parameter
+    final_scale = base_scale * scale
+    # Ensure height and width are equal by using the same scale factor
+    new_size = (max(1, int(ch_w * final_scale)), max(1, int(ch_h * final_scale)))
     if new_size != ch.size:
         ch = ch.resize(new_size, PILImage.Resampling.LANCZOS)
 
@@ -59,7 +64,11 @@ def _composite_character_on_background(
     y = max(0, min(int(y), max(0, bg_h - ch.size[1])))
 
     canvas = bg.copy()
-    canvas.paste(ch, (x, y), ch)
+    # Use alpha_composite for proper transparency blending instead of paste
+    # This ensures the character's alpha channel is properly composited over the background
+    temp = PILImage.new("RGBA", bg.size, (0, 0, 0, 0))
+    temp.paste(ch, (x, y), ch)
+    canvas = PILImage.alpha_composite(canvas, temp)
 
     out = BytesIO()
     canvas.save(out, format="WEBP", quality=92, method=6)
@@ -469,6 +478,7 @@ async def embed_character_on_background_endpoint(
     character_image: UploadFile = File(...),
     x: int = Form(...),
     y: int = Form(...),
+    scale: float = Form(1.0),
     max_character_height_ratio: float = Form(0.72),
     max_character_width_ratio: float = Form(0.62),
     bottom_margin_ratio: float = Form(0.04),
@@ -493,6 +503,7 @@ async def embed_character_on_background_endpoint(
             ch_bytes,
             x=x,
             y=y,
+            scale=scale,
             max_character_height_ratio=max_character_height_ratio,
             max_character_width_ratio=max_character_width_ratio,
             bottom_margin_ratio=bottom_margin_ratio,

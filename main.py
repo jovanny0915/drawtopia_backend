@@ -304,6 +304,7 @@ async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, An
     except Exception as e:
         logger.error(f"Error calling email API {endpoint}: {e}")
         return {"success": False, "error": str(e)}
+    
 app.include_router(image_router)
 app.include_router(children_router)
 app.include_router(character_router)
