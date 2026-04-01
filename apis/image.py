@@ -32,11 +32,16 @@ def _composite_character_on_background(
     Returns WebP bytes.
     """
     from PIL import Image as PILImage
-    from rembg import remove
 
     # Load images and convert to RGBA for transparency support
     background = PILImage.open(BytesIO(background_bytes)).convert("RGBA")
-    character = remove(PILImage.open(BytesIO(character_bytes)).convert("RGBA"))
+    character = PILImage.open(BytesIO(character_bytes)).convert("RGBA")
+
+    for y in range(character.height):
+        for x in range(character.width):
+            r, g, b, a = character.getpixel((x, y))
+            if r > 230 and g > 230 and b > 230:
+                character.putpixel((x, y), (255, 255, 255, 0))
 
     bg_w, bg_h = background.size
     if bg_w <= 0 or bg_h <= 0:
