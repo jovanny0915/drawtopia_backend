@@ -452,48 +452,66 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class EmbedCharacterOnBackgroundRequest(BaseModel):
+    background_image_url: HttpUrl
+    character_image_url: HttpUrl
+    x: int
+    y: int
+    scale: Optional[float] = 1.0
+
+
+class EmbedCharacterOnBackgroundResponse(BaseModel):
+    success: bool
+    url: Optional[str] = None
+    message: str
+
+
 @router.post("/embed-character-on-background")
 @limiter.limit("30/minute")
-async def embed_character_on_background_endpoint(
-    request: Request,
-    body: Optional[dict] = None,  # Accept form data without strict schema
-):
+async def embed_character_on_background_endpoint(request: Request, body: EmbedCharacterOnBackgroundRequest):
     """
-    Inputs: two images (background + character) + pixel coordinates (x, y).
-    Output: a single embedded image (character composited onto background) as WebP.
+    Composite a character image onto a background image at specified coordinates.
     """
-    background_image = body.background_image
-    character_image = body.character_image
-    x = body.x
-    y = body.y
-    scale = body.scale if hasattr(body, 'scale') else 1.0
-    
-    if not background_image.content_type or not background_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="background_image must be an image")
-    if not character_image.content_type or not character_image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="character_image must be an image")
-
+    import main
     try:
-        bg_bytes = await background_image.read()
-        ch_bytes = await character_image.read()
+        background_image_url_str = str(body.background_image_url)
+        character_image_url_str = str(body.character_image_url)
+        
+        main.logger.info(f"Downloading background image from: {background_image_url_str}")
+        bg_bytes = main.download_image_from_url(background_image_url_str)
+        
+        main.logger.info(f"Downloading character image from: {character_image_url_str}")
+        ch_bytes = main.download_image_from_url(character_image_url_str)
+        
         if not bg_bytes or not ch_bytes:
             raise HTTPException(status_code=400, detail="Both images must be non-empty")
 
         result_bytes = _composite_character_on_background(
             bg_bytes,
             ch_bytes,
-            x=x,
-            y=y,
-            scale=scale,
-            max_character_height_ratio=max_character_height_ratio,
-            max_character_width_ratio=max_character_width_ratio,
-            bottom_margin_ratio=bottom_margin_ratio,
+            x=body.x,
+            y=body.y,
+            scale=body.scale,
         )
-        return StreamingResponse(BytesIO(result_bytes), media_type="image/webp")
+        
+        optimized = main.optimize_image_to_jpg(result_bytes)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"embedded_character_{timestamp}_{unique_id}.jpg"
+        storage_result = main.upload_to_supabase(optimized, filename)
+        
+        if storage_result.get("uploaded") and storage_result.get("url"):
+            return EmbedCharacterOnBackgroundResponse(
+                success=True,
+                url=storage_result["url"].split("?")[0] if storage_result.get("url") else None,
+                message="Character embedded on background and uploaded successfully",
+            )
+        raise HTTPException(status_code=500, detail="Failed to upload embedded image to storage")
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to embed character on background: {str(e)}")
+        main.logger.error(f"Error in embed_character_on_background_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/validate-image-quality/")
