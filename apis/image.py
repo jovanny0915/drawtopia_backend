@@ -455,8 +455,8 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 class EmbedCharacterOnBackgroundRequest(BaseModel):
     background_image_url: HttpUrl
     character_image_url: HttpUrl
-    x: int
-    y: int
+    x: float
+    y: float
     scale: Optional[float] = 1.0
 
 
