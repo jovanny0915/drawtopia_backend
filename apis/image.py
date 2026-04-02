@@ -20,8 +20,8 @@ def _composite_character_on_background(
     background_bytes: bytes,
     character_bytes: bytes,
     *,
-    x: int,
-    y: int,
+    x: float,
+    y: float,
     scale: float = 1.0
 ) -> bytes:
     """
@@ -34,11 +34,12 @@ def _composite_character_on_background(
     background = PILImage.open(BytesIO(background_bytes)).convert("RGBA")
     character = PILImage.open(BytesIO(character_bytes)).convert("RGBA")
 
-    for y in range(character.height):
-        for x in range(character.width):
-            r, g, b, a = character.getpixel((x, y))
+    # Remove near-white background from the character image (make transparent)
+    for yy in range(character.height):
+        for xx in range(character.width):
+            r, g, b, a = character.getpixel((xx, yy))
             if r > 230 and g > 230 and b > 230:
-                character.putpixel((x, y), (255, 255, 255, 0))
+                character.putpixel((xx, yy), (255, 255, 255, 0))
 
     bg_w, bg_h = background.size
     if bg_w <= 0 or bg_h <= 0:
@@ -48,8 +49,38 @@ def _composite_character_on_background(
     if ch_w <= 0 or ch_h <= 0:
         raise ValueError("Invalid character image dimensions")
 
+    # Apply scale (resize character) if requested
+    try:
+        if scale is not None and float(scale) != 1.0:
+            new_w = max(1, int(ch_w * float(scale)))
+            new_h = max(1, int(ch_h * float(scale)))
+            character = character.resize((new_w, new_h), PILImage.LANCZOS)
+            ch_w, ch_h = character.size
+    except Exception:
+        ch_w, ch_h = character.size
+
+    # Debug: log final character size (if logger available)
+    try:
+        import main
+        main.logger.info(f"Composite: character final size {ch_w}x{ch_h}, bg size {bg_w}x{bg_h}")
+    except Exception:
+        pass
+
+    # Interpret x,y as either normalized center coordinates (0.0-1.0)
+    # or pixel coordinates. If in [0,1], treat as fraction of background size
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+        x_px = int(round(x * bg_w - ch_w / 2))
+        y_px = int(round(y * bg_h - ch_h / 2))
+    else:
+        x_px = int(round(x))
+        y_px = int(round(y))
+
+    # Clamp position so character stays within background bounds
+    x_px = max(0, min(bg_w - ch_w, x_px))
+    y_px = max(0, min(bg_h - ch_h, y_px))
+
     # Composite using alpha channel (IMPORTANT)
-    background.paste(character, (x, y), character)
+    background.paste(character, (x_px, y_px), character)
 
     # Save final image as WebP
     out = BytesIO()
@@ -458,6 +489,9 @@ class EmbedCharacterOnBackgroundRequest(BaseModel):
     x: float
     y: float
     scale: Optional[float] = 1.0
+    # Optional explicit target size for the character in pixels (overrides scale)
+    target_width: Optional[int] = None
+    target_height: Optional[int] = None
 
 
 class EmbedCharacterOnBackgroundResponse(BaseModel):
@@ -476,16 +510,39 @@ async def embed_character_on_background_endpoint(request: Request, body: EmbedCh
     try:
         background_image_url_str = str(body.background_image_url)
         character_image_url_str = str(body.character_image_url)
-        
-        main.logger.info(f"Downloading background image from: {background_image_url_str}")
-        bg_bytes = main.download_image_from_url(background_image_url_str)
-        
-        main.logger.info(f"Downloading character image from: {character_image_url_str}")
-        ch_bytes = main.download_image_from_url(character_image_url_str)
+
+        # Support either data: URIs (base64 inline) or remote HTTP(S) URLs
+        data_url_pattern = re.compile(r'^data:(?P<mime>[^;]+);base64,(?P<data>.+)$')
+
+        main.logger.info(f"Fetching background image from: {background_image_url_str}")
+        m_bg = data_url_pattern.match(background_image_url_str)
+        if m_bg:
+            try:
+                bg_bytes = base64.b64decode(m_bg.group('data'))
+            except Exception as e:
+                main.logger.error(f"Failed to decode background data URI: {e}")
+                raise HTTPException(status_code=400, detail="Invalid background data URI")
+        else:
+            bg_bytes = main.download_image_from_url(background_image_url_str)
+
+        main.logger.info(f"Fetching character image from: {character_image_url_str}")
+        m_ch = data_url_pattern.match(character_image_url_str)
+        if m_ch:
+            try:
+                ch_bytes = base64.b64decode(m_ch.group('data'))
+            except Exception as e:
+                main.logger.error(f"Failed to decode character data URI: {e}")
+                raise HTTPException(status_code=400, detail="Invalid character data URI")
+        else:
+            ch_bytes = main.download_image_from_url(character_image_url_str)
         
         if not bg_bytes or not ch_bytes:
             raise HTTPException(status_code=400, detail="Both images must be non-empty")
 
+        # Log the incoming placement intent for debugging
+        main.logger.info(f"Embed request: x={body.x}, y={body.y}, scale={body.scale}, target_width={body.target_width}, target_height={body.target_height}")
+
+        # If explicit target dimensions provided, pass them through as kwargs for resizing
         result_bytes = _composite_character_on_background(
             bg_bytes,
             ch_bytes,
