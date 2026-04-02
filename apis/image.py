@@ -456,16 +456,18 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 @limiter.limit("30/minute")
 async def embed_character_on_background_endpoint(
     request: Request,
-    background_image: UploadFile = File(...),
-    character_image: UploadFile = File(...),
-    x: int = Form(...),
-    y: int = Form(...),
-    scale: float = Form(1.0),
+    body: Optional[dict] = None,  # Accept form data without strict schema
 ):
     """
     Inputs: two images (background + character) + pixel coordinates (x, y).
     Output: a single embedded image (character composited onto background) as WebP.
     """
+    background_image = body.background_image
+    character_image = body.character_image
+    x = body.x
+    y = body.y
+    scale = body.scale if hasattr(body, 'scale') else 1.0
+    
     if not background_image.content_type or not background_image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="background_image must be an image")
     if not character_image.content_type or not character_image.content_type.startswith("image/"):
