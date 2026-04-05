@@ -177,7 +177,7 @@ def collect_book_template_image_urls(supabase_client) -> Set[str]:
     """
     template_columns = (
         "cover_image,story_page_images,copyright_page_image,"
-        "dedication_page_image,last_words_page_image,last_story_page_image,back_cover_image"
+        "dedication_page_image,last_words_page_image,last_story_page_image,back_cover_image,character_for_finding"
     )
     response = supabase_client.table("book_templates").select(template_columns).execute()
     template_rows = response.data or []
@@ -194,6 +194,7 @@ def collect_book_template_image_urls(supabase_client) -> Set[str]:
         urls.update(_collect_urls(row.get("last_words_page_image")))
         urls.update(_collect_urls(row.get("last_story_page_image")))
         urls.update(_collect_urls(row.get("back_cover_image")))
+        urls.update(_collect_urls(row.get("character_for_finding")))
     return urls
 
 

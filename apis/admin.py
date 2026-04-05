@@ -42,6 +42,7 @@ class BookTemplateCreate(BaseModel):
     story_style: Optional[str] = None  # '3d', 'anime', or 'cartoon'
     story_type: Optional[str] = None   # alias for story_style
     story_format: Optional[str] = None  # e.g. adventure_story, interactive_story; free-form text
+    character_for_finding: Optional[List[str]] = None
 
 
 class BookTemplateUpdate(BaseModel):
@@ -54,6 +55,7 @@ class BookTemplateUpdate(BaseModel):
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
+    character_for_finding: Optional[List[str]] = None
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
@@ -71,6 +73,7 @@ class BookTemplateResponse(BaseModel):
     copyright_page_image: Optional[str] = None
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
+    character_for_finding: Optional[List[str]] = None
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
@@ -1221,6 +1224,142 @@ async def delete_main_character_image(
         raise HTTPException(status_code=500, detail=f"Failed to delete main character image: {str(e)}")
 
 
+@router.post("/admin/templates/{template_id}/upload-character-for-finding-image")
+@limiter.limit("30/minute")
+async def upload_character_for_finding_image(
+    request: Request,
+    template_id: str,
+    file: UploadFile = File(...),
+    image_index: int = Form(...)
+):
+    """
+    Upload a single character-for-finding image for a book template.
+    Stored in book_templates.character_for_finding (TEXT[]), indexed 0-based.
+    """
+    supabase = get_supabase_client()
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not an image")
+
+    try:
+        template_response = (
+            supabase
+            .table("book_templates")
+            .select("character_for_finding")
+            .eq("id", template_id)
+            .single()
+            .execute()
+        )
+
+        if not template_response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        existing_urls = template_response.data.get("character_for_finding") or []
+
+        file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        file_path = f"book-templates/{template_id}/character-for-finding-{image_index + 1}.{file_ext}"
+
+        public_url = await upload_to_storage(file, "book-images", file_path)
+
+        if image_index < len(existing_urls):
+            existing_urls[image_index] = public_url
+        else:
+            while len(existing_urls) < image_index:
+                existing_urls.append(None)
+            existing_urls.append(public_url)
+
+        existing_urls = [url for url in existing_urls if url is not None]
+
+        response = (
+            supabase
+            .table("book_templates")
+            .update({"character_for_finding": existing_urls})
+            .eq("id", template_id)
+            .execute()
+        )
+
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update template in database")
+
+        logger.info(f"✅ Uploaded character-for-finding image {image_index + 1} for template ID: {template_id}")
+
+        return {
+            "success": True,
+            "data": response.data[0],
+            "image_url": public_url,
+            "image_index": image_index,
+            "total_images": len(existing_urls),
+            "optimized": True,
+            "format": "WebP"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error uploading character-for-finding image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload character-for-finding image: {str(e)}")
+
+
+@router.delete("/admin/templates/{template_id}/character-for-finding-image/{image_index}")
+@limiter.limit("30/minute")
+async def delete_character_for_finding_image(
+    request: Request,
+    template_id: str,
+    image_index: int
+):
+    """Delete one character-for-finding image by index and remove from storage + DB array."""
+    supabase = get_supabase_client()
+
+    try:
+        if image_index < 0:
+            raise HTTPException(status_code=400, detail="image_index must be >= 0")
+
+        template_response = (
+            supabase
+            .table("book_templates")
+            .select("character_for_finding")
+            .eq("id", template_id)
+            .single()
+            .execute()
+        )
+
+        if not template_response.data:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        urls = template_response.data.get("character_for_finding") or []
+        if not isinstance(urls, list):
+            urls = []
+        if image_index >= len(urls):
+            raise HTTPException(status_code=400, detail="image_index out of range")
+
+        url_to_delete = urls[image_index]
+
+        _delete_urls_or_raise(
+            supabase,
+            [url_to_delete] if url_to_delete else [],
+            f"character-for-finding image index {image_index}"
+        )
+
+        new_urls = [u for idx, u in enumerate(urls) if idx != image_index]
+
+        response = (
+            supabase
+            .table("book_templates")
+            .update({"character_for_finding": new_urls})
+            .eq("id", template_id)
+            .execute()
+        )
+
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to update template in database")
+
+        return {"success": True, "data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting character-for-finding image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete character-for-finding image: {str(e)}")
+
+
 @router.post("/admin/templates/{template_id}/upload-story-pages")
 @limiter.limit("20/minute")
 async def upload_story_pages(
@@ -1503,6 +1642,8 @@ async def update_template(
             update_data["cover_image"] = body.cover_image
         if "story_page_images" in provided_fields:
             update_data["story_page_images"] = body.story_page_images
+        if "character_for_finding" in provided_fields:
+            update_data["character_for_finding"] = body.character_for_finding
         if "copyright_page_image" in provided_fields:
             update_data["copyright_page_image"] = body.copyright_page_image
         if "dedication_page_image" in provided_fields:
