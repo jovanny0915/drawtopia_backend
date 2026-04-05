@@ -434,6 +434,37 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
                     "gift_id": body.gift_id,
                     "purchased": body.purchased or False,
                 }
+                # If this is an interactive/search story, try to populate character_for_finding
+                try:
+                    stype = (body.story_type or "").strip().lower()
+                    if stype in ("search", "interactive", "search-and-find"):
+                        # Normalize style/world
+                        style = (body.character_style or "").strip().lower().replace("_", "-").replace(" ", "-")
+                        world = (body.story_world or "").strip().lower()
+                        q = main.supabase.table("book_templates").select("character_for_finding,story_format,story_style,story_world")
+                        if world:
+                            q = q.eq("story_world", world)
+                        if style:
+                            q = q.eq("story_style", style)
+                        resp = q.execute()
+                        rows = resp.data or []
+                        urls = []
+                        for r in rows:
+                            fmt = (r.get("story_format") or "").strip().lower().replace("-", "_")
+                            # Only include templates marked as interactive_story
+                            if fmt != "interactive_story":
+                                continue
+                            cff = r.get("character_for_finding")
+                            if isinstance(cff, list):
+                                for u in cff:
+                                    if isinstance(u, str) and u.strip() and u not in urls:
+                                        urls.append(u)
+                            elif isinstance(cff, str) and cff.strip() and cff not in urls:
+                                urls.append(cff)
+                        if urls:
+                            update_data["character_for_finding"] = urls
+                except Exception as e:
+                    main.logger.warning(f"Could not populate character_for_finding for draft update: {e}")
                 main.supabase.table("stories").update(update_data).eq("uid", existing_uid).execute()
                 story_response = main.supabase.table("stories").select("*").eq("uid", existing_uid).execute()
                 story = story_response.data[0] if story_response.data else None
@@ -465,10 +496,40 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
             "dedication_image": None,
             "status": "draft",
             "story_type": body.story_type or "story",
+            # character_for_finding will be populated for interactive/search stories below
             "hints": None,
             "gift_id": body.gift_id,
             "purchased": body.purchased or False,
         }
+        # Populate character_for_finding for interactive/search stories when inserting
+        try:
+            stype = (body.story_type or "").strip().lower()
+            if stype in ("search", "interactive", "search-and-find"):
+                style = (body.character_style or "").strip().lower().replace("_", "-").replace(" ", "-")
+                world = (body.story_world or "").strip().lower()
+                q = main.supabase.table("book_templates").select("character_for_finding,story_format,story_style,story_world")
+                if world:
+                    q = q.eq("story_world", world)
+                if style:
+                    q = q.eq("story_style", style)
+                resp = q.execute()
+                rows = resp.data or []
+                urls = []
+                for r in rows:
+                    fmt = (r.get("story_format") or "").strip().lower().replace("-", "_")
+                    if fmt != "interactive_story":
+                        continue
+                    cff = r.get("character_for_finding")
+                    if isinstance(cff, list):
+                        for u in cff:
+                            if isinstance(u, str) and u.strip() and u not in urls:
+                                urls.append(u)
+                    elif isinstance(cff, str) and cff.strip() and cff not in urls:
+                        urls.append(cff)
+                if urls:
+                    insert_data["character_for_finding"] = urls
+        except Exception as e:
+            main.logger.warning(f"Could not populate character_for_finding for draft insert: {e}")
         response = main.supabase.table("stories").insert(insert_data).execute()
         if not response.data or len(response.data) == 0:
             # Some Supabase clients don't return inserted row; fetch by uid
