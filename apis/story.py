@@ -17,6 +17,13 @@ from audio_generator import AudioGenerator
 from pdf_generator import create_book_pdf_with_cover
 from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesRequest, StoryAudioRequest, SearchGameResultRequest, StoryTitlesRequest, SaveStoryDraftRequest, SetStoryGeneratingRequest
 
+
+class CheckPointRequest(BaseModel):
+    storyUid: str
+    x: float
+    y: float
+
+
 if TYPE_CHECKING:
     import main
 
@@ -89,6 +96,92 @@ async def create_book_generation_job(request: Request, body):
     except Exception as e:
         main.logger.error(f"Error creating job: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating job: {str(e)}")
+
+
+@router.post("/api/game/check-point")
+@limiter.limit("120/minute")
+async def check_game_point(request: Request, body: CheckPointRequest):
+    """
+    Check whether a normalized (x,y) point falls within any template 'positions' circle
+    (radius 0.2) for the story identified by storyUid.
+    Returns JSON: { success: True, hit: bool }
+    """
+    import main
+    try:
+        if not main.supabase:
+            raise HTTPException(status_code=500, detail="Database service not available")
+
+        if not body.storyUid:
+            raise HTTPException(status_code=400, detail="storyUid is required")
+
+        # Clamp and validate coordinates
+        try:
+            x = float(body.x)
+            y = float(body.y)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid x/y values")
+
+        if not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
+            raise HTTPException(status_code=400, detail="x and y must be between 0.0 and 1.0")
+
+        # Try to find story by UID first
+        story_resp = main.supabase.table("stories").select("id,uid,positions,story_world,character_style,story_type").eq("uid", body.storyUid).execute()
+        story_row = None
+        if story_resp and getattr(story_resp, 'data', None) and len(story_resp.data) > 0:
+            story_row = story_resp.data[0]
+
+        positions = None
+
+        if story_row and isinstance(story_row, dict):
+            positions = story_row.get("positions")
+
+        # If story has no positions, fall back to template positions by matching story_world/story_style
+        if not positions or not isinstance(positions, list) or len(positions) == 0:
+            # Attempt to find a suitable book_template
+            story_world = story_row.get("story_world") if story_row else None
+            story_style = story_row.get("character_style") if story_row else None
+
+            q = main.supabase.table("book_templates").select("id,positions,story_format,story_style,story_world").limit(10)
+            if story_world:
+                q = q.eq("story_world", story_world)
+            if story_style:
+                q = q.eq("story_style", story_style)
+            resp = q.execute()
+            rows = resp.data or []
+            # Choose first template that contains positions
+            for r in rows:
+                p = r.get("positions")
+                if isinstance(p, list) and len(p) > 0:
+                    positions = p
+                    break
+
+        # If still no positions, return hit=false
+        if not positions or not isinstance(positions, list) or len(positions) == 0:
+            return {"success": True, "hit": False}
+
+        # Circle radius in normalized coords
+        R = 0.2
+
+        hit = False
+        for coord in positions:
+            try:
+                cx = float(coord.get('x'))
+                cy = float(coord.get('y'))
+            except Exception:
+                continue
+            dx = cx - x
+            dy = cy - y
+            if (dx*dx + dy*dy) <= (R * R):
+                hit = True
+                break
+
+        return {"success": True, "hit": bool(hit)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        main.logger.error(f"Error in check_game_point: {e}")
+        raise HTTPException(status_code=500, detail=f"Error checking point: {str(e)}")
 
 
 @router.get("/api/books/{book_id}/status")
