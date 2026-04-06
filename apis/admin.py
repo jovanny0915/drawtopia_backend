@@ -43,6 +43,8 @@ class BookTemplateCreate(BaseModel):
     story_type: Optional[str] = None   # alias for story_style
     story_format: Optional[str] = None  # e.g. adventure_story, interactive_story; free-form text
     character_for_finding: Optional[List[str]] = None
+    # positions: JSON array of coordinate objects for template characters
+    positions: Optional[List[Dict[str, float]]] = None
 
 
 class BookTemplateUpdate(BaseModel):
@@ -56,6 +58,8 @@ class BookTemplateUpdate(BaseModel):
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
     character_for_finding: Optional[List[str]] = None
+    # positions: list of coordinate objects: [{"x": float, "y": float}, ...]
+    positions: Optional[List[Dict[str, float]]] = None
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
@@ -74,6 +78,7 @@ class BookTemplateResponse(BaseModel):
     dedication_page_image: Optional[str] = None
     story_page_images: Optional[List[str]] = None
     character_for_finding: Optional[List[str]] = None
+    positions: Optional[List[Dict[str, float]]] = None
     last_words_page_image: Optional[str] = None
     last_story_page_image: Optional[str] = None
     back_cover_image: Optional[str] = None
@@ -1654,6 +1659,33 @@ async def update_template(
             update_data["last_story_page_image"] = body.last_story_page_image
         if "back_cover_image" in provided_fields:
             update_data["back_cover_image"] = body.back_cover_image
+        # Handle positions update (validate structure)
+        if "positions" in provided_fields:
+            positions_val = body.positions
+            if positions_val is None:
+                # Clear positions
+                update_data["positions"] = None
+            else:
+                if not isinstance(positions_val, list):
+                    raise HTTPException(status_code=400, detail="positions must be a list of {x: float, y: float} objects")
+                validated_positions = []
+                if len(positions_val) > 12:
+                    raise HTTPException(status_code=400, detail="positions can contain at most 12 coordinate objects")
+                for idx, coord in enumerate(positions_val):
+                    if not isinstance(coord, dict):
+                        raise HTTPException(status_code=400, detail=f"positions[{idx}] must be an object with x and y floats")
+                    if "x" not in coord or "y" not in coord:
+                        raise HTTPException(status_code=400, detail=f"positions[{idx}] must contain keys 'x' and 'y'")
+                    try:
+                        x = float(coord.get("x"))
+                        y = float(coord.get("y"))
+                    except Exception:
+                        raise HTTPException(status_code=400, detail=f"positions[{idx}].x and .y must be numbers")
+                    # Optionally validate ranges 0.0-1.0
+                    if not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
+                        raise HTTPException(status_code=400, detail=f"positions[{idx}] coordinates must be between 0.0 and 1.0")
+                    validated_positions.append({"x": x, "y": y})
+                update_data["positions"] = validated_positions
 
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
