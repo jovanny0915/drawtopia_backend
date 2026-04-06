@@ -19,8 +19,7 @@ from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesR
 
 
 class CheckPointRequest(BaseModel):
-    storyUid: Optional[str] = None
-    bookTemplateId: Optional[int] = None
+    templateId: str
     x: float
     y: float
 
@@ -103,17 +102,16 @@ async def create_book_generation_job(request: Request, body):
 @limiter.limit("120/minute")
 async def check_game_point(request: Request, body: CheckPointRequest):
     """
-    Check whether a normalized (x,y) point falls within any template 'positions' circle
-    (radius 0.2) for the story identified by storyUid.
-    Returns JSON: { success: True, hit: bool }
+    Check whether a normalized (x,y) point falls within any `book_templates.positions` circle
+    (radius 0.1) for the provided `templateId` (id or uid). Returns JSON: { success: True, hit: bool }
     """
     import main
     try:
         if not main.supabase:
             raise HTTPException(status_code=500, detail="Database service not available")
 
-        if not body.bookTemplateId and not body.storyUid:
-            raise HTTPException(status_code=400, detail="Either bookTemplateId or storyUid is required")
+        if not body.templateId:
+            raise HTTPException(status_code=400, detail="templateId is required")
 
         # Clamp and validate coordinates
         try:
@@ -125,54 +123,32 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         if not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
             raise HTTPException(status_code=400, detail="x and y must be between 0.0 and 1.0")
 
+        # Lookup the template by id (or uid) and use its positions
         positions = None
+        try:
+            tmpl_resp = main.supabase.table("book_templates").select("id,positions").eq("id", body.templateId).limit(1).execute()
+            tmpl_row = tmpl_resp.data[0] if tmpl_resp and getattr(tmpl_resp, 'data', None) and len(tmpl_resp.data) > 0 else None
+        except Exception:
+            tmpl_row = None
 
-        # If a book template id is provided, prefer its positions
-        if body.bookTemplateId:
+        if not tmpl_row:
             try:
-                tpl_resp = main.supabase.table("book_templates").select("id,positions,story_format,story_style,story_world").eq("id", int(body.bookTemplateId)).limit(1).execute()
-                if tpl_resp and getattr(tpl_resp, 'data', None) and len(tpl_resp.data) > 0:
-                    tpl_row = tpl_resp.data[0]
-                    positions = tpl_row.get("positions")
+                tmpl_resp2 = main.supabase.table("book_templates").select("id,positions").eq("uid", body.templateId).limit(1).execute()
+                tmpl_row = tmpl_resp2.data[0] if tmpl_resp2 and getattr(tmpl_resp2, 'data', None) and len(tmpl_resp2.data) > 0 else None
             except Exception:
-                positions = None
+                tmpl_row = None
 
-        # Otherwise, try to find story by UID first and fall back to templates
-        if positions is None:
-            story_resp = main.supabase.table("stories").select("id,uid,positions,story_world,character_style,story_type,book_template_id").eq("uid", body.storyUid).execute() if body.storyUid else None
-            story_row = None
-            if story_resp and getattr(story_resp, 'data', None) and len(story_resp.data) > 0:
-                story_row = story_resp.data[0]
+        if tmpl_row and isinstance(tmpl_row, dict):
+            p = tmpl_row.get("positions")
+            if isinstance(p, list) and len(p) > 0:
+                positions = p
 
-            if story_row and isinstance(story_row, dict):
-                positions = story_row.get("positions")
-
-            # If story has no positions, fall back to template positions by matching story_world/story_style
-            if not positions or not isinstance(positions, list) or len(positions) == 0:
-                # Attempt to find a suitable book_template
-                story_world = story_row.get("story_world") if story_row else None
-                story_style = story_row.get("character_style") if story_row else None
-
-                q = main.supabase.table("book_templates").select("id,positions,story_format,story_style,story_world").limit(10)
-                if story_world:
-                    q = q.eq("story_world", story_world)
-                if story_style:
-                    q = q.eq("story_style", story_style)
-                resp = q.execute()
-                rows = resp.data or []
-                # Choose first template that contains positions
-                for r in rows:
-                    p = r.get("positions")
-                    if isinstance(p, list) and len(p) > 0:
-                        positions = p
-                        break
-
-        # If still no positions, return hit=false
+        # If no positions found for the template, return hit=false
         if not positions or not isinstance(positions, list) or len(positions) == 0:
             return {"success": True, "hit": False}
 
-        # Circle radius in normalized coords
-        R = 0.2
+        # Circle radius in normalized coords (updated to 0.1 per request)
+        R = 0.1
 
         hit = False
         for coord in positions:
