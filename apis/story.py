@@ -20,6 +20,7 @@ from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesR
 
 class CheckPointRequest(BaseModel):
     templateId: str
+    pageNumber: int
     x: float
     y: float
 
@@ -102,8 +103,9 @@ async def create_book_generation_job(request: Request, body):
 @limiter.limit("120/minute")
 async def check_game_point(request: Request, body: CheckPointRequest):
     """
-    Check whether a normalized (x,y) point falls within any `book_templates.positions` circle
-    (radius 0.1) for the provided `templateId` (id or uid). Returns JSON: { success: True, hit: bool }
+    Check whether a normalized (x,y) point falls within the page-specific position subset
+    in `book_templates.positions` for provided `templateId` and `pageNumber` (3-6).
+    Returns JSON: { success: True, hit: bool }
     """
     import main
     try:
@@ -112,6 +114,8 @@ async def check_game_point(request: Request, body: CheckPointRequest):
 
         if not body.templateId:
             raise HTTPException(status_code=400, detail="templateId is required")
+        if body.pageNumber not in (3, 4, 5, 6):
+            raise HTTPException(status_code=400, detail="pageNumber must be one of 3, 4, 5, 6")
 
         # Clamp and validate coordinates
         try:
@@ -140,11 +144,20 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         if not positions or not isinstance(positions, list) or len(positions) == 0:
             return {"success": True, "hit": False}
 
-        # Circle radius in normalized coords (updated to 0.1 per request)
+        # Select only the 4 positions for the current page:
+        # page 3 -> 0..3, page 4 -> 4..7, page 5 -> 8..11, page 6 -> 12..15
+        start_idx = (body.pageNumber - 3) * 4
+        end_idx = start_idx + 4
+        page_positions = positions[start_idx:end_idx]
+
+        if len(page_positions) == 0:
+            return {"success": True, "hit": False}
+
+        # Circle radius in normalized coords
         R = 0.05
 
         hit = False
-        for coord in positions:
+        for coord in page_positions:
             try:
                 cx = float(coord.get('x'))
                 cy = float(coord.get('y'))
