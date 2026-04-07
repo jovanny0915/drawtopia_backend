@@ -1669,8 +1669,8 @@ async def update_template(
                 if not isinstance(positions_val, list):
                     raise HTTPException(status_code=400, detail="positions must be a list of {x: float, y: float} objects")
                 validated_positions = []
-                if len(positions_val) > 12:
-                    raise HTTPException(status_code=400, detail="positions can contain at most 12 coordinate objects")
+                if len(positions_val) > 16:
+                    raise HTTPException(status_code=400, detail="positions can contain at most 16 coordinate objects")
                 for idx, coord in enumerate(positions_val):
                     if not isinstance(coord, dict):
                         raise HTTPException(status_code=400, detail=f"positions[{idx}] must be an object with x and y floats")

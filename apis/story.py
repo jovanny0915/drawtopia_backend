@@ -131,13 +131,6 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         except Exception:
             tmpl_row = None
 
-        if not tmpl_row:
-            try:
-                tmpl_resp2 = main.supabase.table("book_templates").select("id,positions").eq("uid", body.templateId).limit(1).execute()
-                tmpl_row = tmpl_resp2.data[0] if tmpl_resp2 and getattr(tmpl_resp2, 'data', None) and len(tmpl_resp2.data) > 0 else None
-            except Exception:
-                tmpl_row = None
-
         if tmpl_row and isinstance(tmpl_row, dict):
             p = tmpl_row.get("positions")
             if isinstance(p, list) and len(p) > 0:
@@ -148,7 +141,7 @@ async def check_game_point(request: Request, body: CheckPointRequest):
             return {"success": True, "hit": False}
 
         # Circle radius in normalized coords (updated to 0.1 per request)
-        R = 0.1
+        R = 0.05
 
         hit = False
         for coord in positions:
@@ -157,8 +150,8 @@ async def check_game_point(request: Request, body: CheckPointRequest):
                 cy = float(coord.get('y'))
             except Exception:
                 continue
-            dx = cx - x
-            dy = cy - y
+            dx = cx - x - 0.05
+            dy = cy - y - 0.05
             if (dx*dx + dy*dy) <= (R * R):
                 hit = True
                 break
