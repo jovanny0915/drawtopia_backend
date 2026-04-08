@@ -105,7 +105,10 @@ async def check_game_point(request: Request, body: CheckPointRequest):
     """
     Check whether a normalized (x,y) point falls within the page-specific position subset
     in `book_templates.positions` for provided `templateId` and `pageNumber` (3-6).
-    Returns JSON: { success: True, hit: bool }
+    Returns JSON: { success: True, hit: int }
+    Where `hit` is:
+      - 0 if not found
+      - 1..4 indicating which character point subset was hit
     """
     import main
     try:
@@ -140,9 +143,9 @@ async def check_game_point(request: Request, body: CheckPointRequest):
             if isinstance(p, list) and len(p) > 0:
                 positions = p
 
-        # If no positions found for the template, return hit=false
+        # If no positions found for the template, return hit=0
         if not positions or not isinstance(positions, list) or len(positions) == 0:
-            return {"success": True, "hit": False}
+            return {"success": True, "hit": 0}
 
         # Select only the 4 positions for the current page:
         # page 3 -> 0..3, page 4 -> 4..7, page 5 -> 8..11, page 6 -> 12..15
@@ -151,13 +154,13 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         page_positions = positions[start_idx:end_idx]
 
         if len(page_positions) == 0:
-            return {"success": True, "hit": False}
+            return {"success": True, "hit": 0}
 
         # Circle radius in normalized coords
         R = 0.05
 
-        hit = False
-        for coord in page_positions:
+        hit_index = 0
+        for idx, coord in enumerate(page_positions):
             try:
                 cx = float(coord.get('x'))
                 cy = float(coord.get('y'))
@@ -166,10 +169,10 @@ async def check_game_point(request: Request, body: CheckPointRequest):
             dx = cx - x - 0.05
             dy = cy - y - 0.05
             if (dx*dx + dy*dy) <= (R * R):
-                hit = True
+                hit_index = idx + 1
                 break
 
-        return {"success": True, "hit": bool(hit)}
+        return {"success": True, "hit": hit_index}
 
     except HTTPException:
         raise
