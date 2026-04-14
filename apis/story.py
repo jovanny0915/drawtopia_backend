@@ -157,7 +157,7 @@ async def check_game_point(request: Request, body: CheckPointRequest):
             return {"success": True, "hit": 0}
 
         # Circle radius in normalized coords
-        R = 0.1
+        R = 0.05
 
         hit_index = 0
         for idx, coord in enumerate(page_positions):
