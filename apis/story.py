@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, Header, Body
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, List, Dict, Any
 import uuid
 import requests
 import time
@@ -19,7 +19,8 @@ from .models import StoryRequest, StoryGenerateWithProgressRequest, StoryScenesR
 
 
 class CheckPointRequest(BaseModel):
-    templateId: str
+    templateId: Optional[str] = None
+    storyUid: Optional[str] = None
     pageNumber: int
     x: float
     y: float
@@ -103,8 +104,11 @@ async def create_book_generation_job(request: Request, body):
 @limiter.limit("120/minute")
 async def check_game_point(request: Request, body: CheckPointRequest):
     """
-    Check whether a normalized (x,y) point falls within the page-specific position subset
-    in `book_templates.positions` for provided `templateId` and `pageNumber` (3-6).
+    Check whether a normalized (x,y) point falls within the page-specific position subset.
+    Positions can come from:
+      - `book_templates.positions` (using `templateId`)
+      - `stories.positions` (using `storyUid`)
+      - `stories.template_id` -> `book_templates.positions` fallback
     Returns JSON: { success: True, hit: int }
     Where `hit` is:
       - 0 if not found
@@ -115,10 +119,10 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         if not main.supabase:
             raise HTTPException(status_code=500, detail="Database service not available")
 
-        if not body.templateId:
-            raise HTTPException(status_code=400, detail="templateId is required")
-        if body.pageNumber not in (3, 4, 5, 6):
-            raise HTTPException(status_code=400, detail="pageNumber must be one of 3, 4, 5, 6")
+        if not body.templateId and not body.storyUid:
+            raise HTTPException(status_code=400, detail="templateId or storyUid is required")
+        if body.pageNumber < 1:
+            raise HTTPException(status_code=400, detail="pageNumber must be >= 1")
 
         # Clamp and validate coordinates
         try:
@@ -130,33 +134,97 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         if not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
             raise HTTPException(status_code=400, detail="x and y must be between 0.0 and 1.0")
 
-        # Lookup the template by id (or uid) and use its positions
-        positions = None
-        try:
-            tmpl_resp = main.supabase.table("book_templates").select("id,positions").eq("id", body.templateId).limit(1).execute()
-            tmpl_row = tmpl_resp.data[0] if tmpl_resp and getattr(tmpl_resp, 'data', None) and len(tmpl_resp.data) > 0 else None
-        except Exception:
-            tmpl_row = None
+        def extract_positions(row: Any) -> Optional[List[Dict[str, float]]]:
+            if isinstance(row, dict):
+                p = row.get("positions")
+                if isinstance(p, list) and len(p) > 0:
+                    return p
+            return None
 
-        if tmpl_row and isinstance(tmpl_row, dict):
-            p = tmpl_row.get("positions")
-            if isinstance(p, list) and len(p) > 0:
-                positions = p
+        positions: Optional[List[Dict[str, float]]] = None
+        story_row = None
+
+        # 1) Primary: templateId -> book_templates.positions
+        if body.templateId:
+            try:
+                tmpl_resp = (
+                    main.supabase.table("book_templates")
+                    .select("id,positions")
+                    .eq("id", body.templateId)
+                    .limit(1)
+                    .execute()
+                )
+                tmpl_row = tmpl_resp.data[0] if tmpl_resp and getattr(tmpl_resp, "data", None) and len(tmpl_resp.data) > 0 else None
+                positions = extract_positions(tmpl_row)
+            except Exception:
+                positions = None
+
+        # 2) Fallback: storyUid (or templateId accidentally carrying story UID)
+        story_lookup_uid = body.storyUid or body.templateId
+        if not positions and story_lookup_uid:
+            try:
+                story_resp = (
+                    main.supabase.table("stories")
+                    .select("uid,template_id,positions")
+                    .eq("uid", story_lookup_uid)
+                    .limit(1)
+                    .execute()
+                )
+                story_row = story_resp.data[0] if story_resp and getattr(story_resp, "data", None) and len(story_resp.data) > 0 else None
+                positions = extract_positions(story_row)
+            except Exception:
+                story_row = None
+
+        # 3) Fallback: story.template_id -> book_templates.positions
+        if not positions and isinstance(story_row, dict) and story_row.get("template_id"):
+            try:
+                tmpl_resp = (
+                    main.supabase.table("book_templates")
+                    .select("id,positions")
+                    .eq("id", str(story_row.get("template_id")))
+                    .limit(1)
+                    .execute()
+                )
+                tmpl_row = tmpl_resp.data[0] if tmpl_resp and getattr(tmpl_resp, "data", None) and len(tmpl_resp.data) > 0 else None
+                positions = extract_positions(tmpl_row)
+            except Exception:
+                positions = None
 
         # If no positions found for the template, return hit=0
         if not positions or not isinstance(positions, list) or len(positions) == 0:
             return {"success": True, "hit": 0}
 
-        # Select only the 4 positions for the current page:
-        # page 3 -> 0..3, page 4 -> 4..7, page 5 -> 8..11, page 6 -> 12..15
-        start_idx = (body.pageNumber - 3) * 4
-        end_idx = start_idx + 4
-        page_positions = positions[start_idx:end_idx]
+        # Resolve the current page subset.
+        # Common layouts:
+        # - 16 points across pages 3..6
+        # - 16 points across pages 1..4
+        # - 4 points total (single-page layout)
+        page_positions: List[Dict[str, float]] = []
+        total = len(positions)
+        if total >= 16:
+            # Try page 3..6 mapping first
+            if 3 <= body.pageNumber <= 6:
+                start_idx = (body.pageNumber - 3) * 4
+            else:
+                # Then page 1..4 mapping
+                start_idx = (body.pageNumber - 1) * 4
+            if start_idx < 0 or start_idx + 4 > total:
+                start_idx = 0
+            page_positions = positions[start_idx:start_idx + 4]
+        elif total == 4:
+            page_positions = positions
+        else:
+            # Graceful handling for non-standard data: pick page-sized chunk if possible.
+            start_idx = (max(body.pageNumber, 1) - 1) * 4
+            if start_idx < total:
+                page_positions = positions[start_idx:start_idx + 4]
+            if len(page_positions) == 0:
+                page_positions = positions[:4]
 
         if len(page_positions) == 0:
             return {"success": True, "hit": 0}
 
-        # Circle radius in normalized coords
+        # Circle radius in normalized coordinates.
         R = 0.05
 
         hit_index = 0
