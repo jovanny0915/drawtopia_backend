@@ -166,8 +166,9 @@ async def check_game_point(request: Request, body: CheckPointRequest):
                 cy = float(coord.get('y'))
             except Exception:
                 continue
-            dx = cx - x - 0.05
-            dy = cy - y - 0.05
+            # Compare center-to-pointer distance in the same normalized coordinate space.
+            dx = cx - x
+            dy = cy - y
             if (dx*dx + dy*dy) <= (R * R):
                 hit_index = idx + 1
                 break
