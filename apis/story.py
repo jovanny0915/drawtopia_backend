@@ -144,13 +144,49 @@ async def check_game_point(request: Request, body: CheckPointRequest):
         positions: Optional[List[Dict[str, float]]] = None
         story_row = None
 
-        # 1) Primary: templateId -> book_templates.positions
-        if body.templateId:
+        # Story ID is commonly passed by the client.
+        # Accept either storyUid field or templateId field carrying story UID/ID.
+        story_identifier = body.storyUid or body.templateId
+
+        # 1) Primary: read story first, then use story.template_id -> book_templates.positions
+        if story_identifier:
+            try:
+                story_resp = (
+                    main.supabase.table("stories")
+                    .select("id,uid,template_id,positions")
+                    .eq("uid", str(story_identifier))
+                    .limit(1)
+                    .execute()
+                )
+                story_row = story_resp.data[0] if story_resp and getattr(story_resp, "data", None) and len(story_resp.data) > 0 else None
+            except Exception:
+                story_row = None
+
+            # Optional fallback: story numeric id
+            if not story_row:
+                try:
+                    numeric_story_id = int(str(story_identifier))
+                    story_resp = (
+                        main.supabase.table("stories")
+                        .select("id,uid,template_id,positions")
+                        .eq("id", numeric_story_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    story_row = story_resp.data[0] if story_resp and getattr(story_resp, "data", None) and len(story_resp.data) > 0 else None
+                except Exception:
+                    story_row = story_row
+
+        # Keep support for stories.positions when present.
+        if isinstance(story_row, dict):
+            positions = extract_positions(story_row)
+
+        if not positions and isinstance(story_row, dict) and story_row.get("template_id"):
             try:
                 tmpl_resp = (
                     main.supabase.table("book_templates")
                     .select("id,positions")
-                    .eq("id", body.templateId)
+                    .eq("id", str(story_row.get("template_id")))
                     .limit(1)
                     .execute()
                 )
@@ -159,29 +195,13 @@ async def check_game_point(request: Request, body: CheckPointRequest):
             except Exception:
                 positions = None
 
-        # 2) Fallback: storyUid (or templateId accidentally carrying story UID)
-        story_lookup_uid = body.storyUid or body.templateId
-        if not positions and story_lookup_uid:
-            try:
-                story_resp = (
-                    main.supabase.table("stories")
-                    .select("uid,template_id,positions")
-                    .eq("uid", story_lookup_uid)
-                    .limit(1)
-                    .execute()
-                )
-                story_row = story_resp.data[0] if story_resp and getattr(story_resp, "data", None) and len(story_resp.data) > 0 else None
-                positions = extract_positions(story_row)
-            except Exception:
-                story_row = None
-
-        # 3) Fallback: story.template_id -> book_templates.positions
-        if not positions and isinstance(story_row, dict) and story_row.get("template_id"):
+        # 2) Backward compatibility: if caller truly sends templateId, query template directly
+        if not positions and body.templateId:
             try:
                 tmpl_resp = (
                     main.supabase.table("book_templates")
                     .select("id,positions")
-                    .eq("id", str(story_row.get("template_id")))
+                    .eq("id", body.templateId)
                     .limit(1)
                     .execute()
                 )
