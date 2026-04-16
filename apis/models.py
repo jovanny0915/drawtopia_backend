@@ -106,6 +106,7 @@ class SaveStoryDraftRequest(BaseModel):
     story_title: Optional[str] = None
     story_cover: Optional[str] = None
     cover_design: Optional[str] = None
+    template_id: Optional[str] = None
     story_type: Optional[str] = "story"  # story or search
     gift_id: Optional[str] = None
     purchased: Optional[bool] = False
