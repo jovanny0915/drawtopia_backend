@@ -100,6 +100,7 @@ class SaveStoryDraftRequest(BaseModel):
     character_style: str  # 3d, cartoon, anime
     story_world: str  # forest, space, underwater
     adventure_type: str  # treasure_hunt, helping_friend
+    difficulty: Optional[str] = None  # interactive story difficulty
     original_image_url: str
     enhanced_images: Optional[List[str]] = None
     story_title: Optional[str] = None
