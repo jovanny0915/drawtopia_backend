@@ -1265,17 +1265,28 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
         client = OpenAI(api_key=main.OPENAI_API_KEY)
 
         if is_interactive_format:
-            prompt = f"""Generate exactly 3 fun, mysterious children's story title suggestions in the style of "Where is Markie in the World?" using the character name {body.character_name} and hinting at a global adventure without revealing the exact location.
+            prompt = f"Generate a fun, mysterious children’s story title in the style of “Where is Markie in the World?” using the character {body.character_name} and hinting at a global adventure without revealing the exact location."
 
-REQUIREMENTS:
-1. Each title must include the character's name ({body.character_name})
-2. Each title should feel playful, curious, and search-adventure oriented
-3. Hint at worldwide or globe-trotting exploration without naming a specific place
-4. Keep titles concise (under 50 characters each)
-5. Make all 3 titles distinct from one another
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,
+                max_tokens=60,
+                n=3
+            )
 
-Return ONLY a JSON array of exactly 3 title strings, nothing else. Example format:
-["Title 1", "Title 2", "Title 3"]"""
+            titles = []
+            for choice in response.choices:
+                content = (choice.message.content or "").strip()
+                if not content:
+                    continue
+
+                first_line = content.splitlines()[0].strip()
+                cleaned_title = first_line.strip().strip('"').strip("'")
+                if cleaned_title and cleaned_title not in titles:
+                    titles.append(cleaned_title)
         else:
             prompt = f"""Generate exactly 3 creative, engaging story title suggestions for a personalized children's storybook.
 
@@ -1301,29 +1312,30 @@ REQUIREMENTS:
 Return ONLY a JSON array of exactly 3 title strings, nothing else. Example format:
 ["Title 1", "Title 2", "Title 3"]"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a creative writer for children's books. Return only valid JSON arrays."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.8,
-            max_tokens=300
-        )
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a creative writer for children's books. Return only valid JSON arrays."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,
+                max_tokens=300
+            )
 
-        content = response.choices[0].message.content.strip()
-        # Parse JSON - handle potential markdown code blocks
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-        titles = json.loads(content)
+            content = response.choices[0].message.content.strip()
+            # Parse JSON - handle potential markdown code blocks
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+            titles = json.loads(content)
 
-        if not isinstance(titles, list):
-            raise ValueError("Expected a list of titles from OpenAI")
+            if not isinstance(titles, list):
+                raise ValueError("Expected a list of titles from OpenAI")
 
-        titles = [str(t).strip() for t in titles[:5] if str(t).strip()][:3]
+            titles = [str(t).strip() for t in titles[:5] if str(t).strip()][:3]
+
         fallbacks = [
             f"The Great Adventure of {body.character_name}",
             f"The Amazing Journey of {body.character_name}",
