@@ -1251,10 +1251,33 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
             "helping_friend": "Helping a Friend"
         }.get(body.adventure_type.lower(), body.adventure_type)
 
+        normalized_story_format = (body.story_format or "story").strip().lower().replace("-", "_")
+        is_interactive_format = normalized_story_format in {
+            "interactive",
+            "interactive_story",
+            "interactive_search",
+            "search",
+            "search_and_find",
+            "intersearch",
+        }
+
         from openai import OpenAI
         client = OpenAI(api_key=main.OPENAI_API_KEY)
 
-        prompt = f"""Generate exactly 3 creative, engaging story title suggestions for a personalized children's storybook.
+        if is_interactive_format:
+            prompt = f"""Generate exactly 3 fun, mysterious children's story title suggestions in the style of "Where is Markie in the World?" using the character name {body.character_name} and hinting at a global adventure without revealing the exact location.
+
+REQUIREMENTS:
+1. Each title must include the character's name ({body.character_name})
+2. Each title should feel playful, curious, and search-adventure oriented
+3. Hint at worldwide or globe-trotting exploration without naming a specific place
+4. Keep titles concise (under 50 characters each)
+5. Make all 3 titles distinct from one another
+
+Return ONLY a JSON array of exactly 3 title strings, nothing else. Example format:
+["Title 1", "Title 2", "Title 3"]"""
+        else:
+            prompt = f"""Generate exactly 3 creative, engaging story title suggestions for a personalized children's storybook.
 
 CHARACTER INFORMATION:
 - Name: {body.character_name}
