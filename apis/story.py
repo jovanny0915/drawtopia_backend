@@ -1288,53 +1288,28 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
                 if cleaned_title and cleaned_title not in titles:
                     titles.append(cleaned_title)
         else:
-            prompt = f"""Generate exactly 3 creative, engaging story title suggestions for a personalized children's storybook.
-
-CHARACTER INFORMATION:
-- Name: {body.character_name}
-- Type: {body.character_type}
-- Special Ability: {body.special_ability}
-- Art Style: {body.character_style}
-
-STORY SETTING:
-- World: {world_display}
-- Adventure Type: {adventure_display}
-- Story Format: {body.story_format}
-- Target Age Group: {body.age_group}
-
-REQUIREMENTS:
-1. Each title must include the character's name ({body.character_name})
-2. Titles should reflect the story world ({world_display}) and adventure type ({adventure_display})
-3. Titles should be engaging, magical, and age-appropriate for children
-4. Each title should be unique and have a different style (e.g., one adventurous, one whimsical, one epic)
-5. Keep titles concise (under 50 characters each)
-
-Return ONLY a JSON array of exactly 3 title strings, nothing else. Example format:
-["Title 1", "Title 2", "Title 3"]"""
+            prompt = f"Create a short, gentle children’s story title in the style of ‘Anna’s Bedtime Story’ using a 3D character named {body.character_name}, set in a magical {body.story_world}, involving a treasure adventure and {body.special_ability} for ages {body.age_group}."
 
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a creative writer for children's books. Return only valid JSON arrays."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.8,
-                max_tokens=300
+                max_tokens=60,
+                n=3
             )
 
-            content = response.choices[0].message.content.strip()
-            # Parse JSON - handle potential markdown code blocks
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-            titles = json.loads(content)
+            titles = []
+            for choice in response.choices:
+                content = (choice.message.content or "").strip()
+                if not content:
+                    continue
 
-            if not isinstance(titles, list):
-                raise ValueError("Expected a list of titles from OpenAI")
-
-            titles = [str(t).strip() for t in titles[:5] if str(t).strip()][:3]
+                first_line = content.splitlines()[0].strip()
+                cleaned_title = first_line.strip().strip('"').strip("'")
+                if cleaned_title and cleaned_title not in titles:
+                    titles.append(cleaned_title)
 
         fallbacks = [
             f"The Great Adventure of {body.character_name}",
