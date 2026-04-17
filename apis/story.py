@@ -1307,7 +1307,7 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
                     continue
 
                 first_line = content.splitlines()[0].strip()
-                cleaned_title = first_line.strip().strip('"').strip("'")
+                cleaned_title = first_line.strip().strip("**").strip('"').strip("'")
                 if cleaned_title and cleaned_title not in titles:
                     titles.append(cleaned_title)
 
