@@ -153,6 +153,279 @@ def normalize_story_style(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+SUBSCRIPTION_ACTIVE_STATUSES = {
+    "premium",
+    "active",
+    "trialing",
+    "cancelled",
+    "canceled",
+    "past_due",
+    "unpaid",
+    "incomplete",
+    "incomplete_expired",
+}
+
+FOUNDING_MEMBER_MAX_AMOUNT = 170.0
+
+
+def _normalize_text_filter(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _safe_parse_datetime(value: Optional[Any]) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _safe_parse_amount(value: Optional[Any]) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if amount > 1000:
+        return amount / 100.0
+    return amount
+
+
+def _full_name(row: Dict[str, Any]) -> str:
+    return f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
+
+
+def _derive_account_type(
+    user_row: Dict[str, Any],
+    latest_subscription: Optional[Dict[str, Any]],
+    story_count: int,
+    purchase_count: int,
+    child_count: int,
+) -> str:
+    subscription_status = _normalize_text_filter(user_row.get("subscription_status"))
+    has_subscription = latest_subscription is not None or subscription_status in SUBSCRIPTION_ACTIVE_STATUSES
+
+    if has_subscription:
+        amount = _safe_parse_amount((latest_subscription or {}).get("amount"))
+        if amount is not None and amount <= FOUNDING_MEMBER_MAX_AMOUNT:
+            return "founding_member"
+        return "family"
+
+    if purchase_count > 0 or story_count > 0 or child_count > 0:
+        return "individual"
+
+    return "free"
+
+
+def _build_user_summary(
+    user_row: Dict[str, Any],
+    story_count_by_user: Dict[str, int],
+    latest_login_by_user: Dict[str, Optional[str]],
+    latest_subscription_by_user: Dict[str, Dict[str, Any]],
+    purchase_summary_by_user: Dict[str, Dict[str, Any]],
+    child_count_by_user: Dict[str, int],
+) -> Dict[str, Any]:
+    user_id = str(user_row.get("id"))
+    story_count = story_count_by_user.get(user_id, 0)
+    purchase_summary = purchase_summary_by_user.get(user_id, {})
+    child_count = child_count_by_user.get(user_id, 0)
+    latest_subscription = latest_subscription_by_user.get(user_id)
+
+    last_login = user_row.get("last_login") or latest_login_by_user.get(user_id)
+    account_type = _derive_account_type(
+        user_row=user_row,
+        latest_subscription=latest_subscription,
+        story_count=story_count,
+        purchase_count=int(purchase_summary.get("purchase_count", 0) or 0),
+        child_count=child_count,
+    )
+
+    return {
+        "id": user_id,
+        "email": user_row.get("email"),
+        "first_name": user_row.get("first_name"),
+        "last_name": user_row.get("last_name"),
+        "full_name": _full_name(user_row),
+        "avatar_url": user_row.get("avatar_url"),
+        "role": user_row.get("role"),
+        "subscription_status": user_row.get("subscription_status"),
+        "subscription_expires": user_row.get("subscription_expires"),
+        "credit": user_row.get("credit"),
+        "created_at": user_row.get("created_at"),
+        "registration_date": user_row.get("created_at"),
+        "last_login": last_login,
+        "account_type": account_type,
+        "total_stories_created": story_count,
+        "story_count": story_count,
+        "child_count": child_count,
+        "purchase_count": int(purchase_summary.get("purchase_count", 0) or 0),
+        "total_amount_paid": purchase_summary.get("total_amount_paid", 0.0) or 0.0,
+        "latest_subscription": latest_subscription,
+    }
+
+
+def _matches_date_range(value: Optional[Any], start: Optional[datetime], end: Optional[datetime]) -> bool:
+    if start is None and end is None:
+        return True
+    candidate = _safe_parse_datetime(value)
+    if candidate is None:
+        return False
+    if start is not None and candidate < start:
+        return False
+    if end is not None and candidate > end:
+        return False
+    return True
+
+
+def _filter_user_summaries(
+    summaries: List[Dict[str, Any]],
+    search: Optional[str],
+    account_type: Optional[str],
+    subscription_status: Optional[str],
+    registered_from: Optional[datetime],
+    registered_to: Optional[datetime],
+    story_count_min: Optional[int],
+    story_count_max: Optional[int],
+) -> List[Dict[str, Any]]:
+    normalized_search = _normalize_text_filter(search)
+    normalized_account_type = _normalize_text_filter(account_type)
+    normalized_subscription_status = _normalize_text_filter(subscription_status)
+
+    filtered: List[Dict[str, Any]] = []
+    for summary in summaries:
+        if normalized_search:
+            haystack = " ".join([
+                str(summary.get("id") or ""),
+                str(summary.get("email") or ""),
+                str(summary.get("full_name") or ""),
+            ]).lower()
+            if normalized_search not in haystack:
+                continue
+
+        if normalized_account_type and _normalize_text_filter(summary.get("account_type")) != normalized_account_type:
+            continue
+
+        if normalized_subscription_status and _normalize_text_filter(summary.get("subscription_status")) != normalized_subscription_status:
+            continue
+
+        if not _matches_date_range(summary.get("created_at"), registered_from, registered_to):
+            continue
+
+        story_count = int(summary.get("total_stories_created", 0) or 0)
+        if story_count_min is not None and story_count < story_count_min:
+            continue
+        if story_count_max is not None and story_count > story_count_max:
+            continue
+
+        filtered.append(summary)
+
+    return filtered
+
+
+def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
+    users_response = (
+        supabase
+        .table("users")
+        .select(
+            "id,email,first_name,last_name,avatar_url,role,subscription_status,"
+            "subscription_expires,credit,created_at,last_login,stripe_customer_id"
+        )
+        .order("created_at", desc=True)
+        .execute()
+    )
+    users = users_response.data or []
+
+    stories_response = supabase.table("stories").select("id,user_id,uid,story_title,created_at,status,story_type,character_id").execute()
+    stories = stories_response.data or []
+    story_count_by_user: Dict[str, int] = defaultdict(int)
+    for row in stories:
+        user_id = row.get("user_id")
+        if user_id:
+            story_count_by_user[str(user_id)] += 1
+
+    auth_history_response = (
+        supabase
+        .table("user_auth_history")
+        .select("user_id,event_type,created_at")
+        .eq("event_type", "login")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    latest_login_by_user: Dict[str, Optional[str]] = {}
+    for row in (auth_history_response.data or []):
+        user_id = row.get("user_id")
+        if user_id and str(user_id) not in latest_login_by_user:
+            latest_login_by_user[str(user_id)] = row.get("created_at")
+
+    subscriptions_response = (
+        supabase
+        .table("subscriptions")
+        .select(
+            "user_id,status,plan_type,amount,current_period_start,current_period_end,"
+            "created_at,updated_at,stripe_subscription_id"
+        )
+        .order("created_at", desc=True)
+        .execute()
+    )
+    latest_subscription_by_user: Dict[str, Dict[str, Any]] = {}
+    for row in (subscriptions_response.data or []):
+        user_id = row.get("user_id")
+        if user_id and str(user_id) not in latest_subscription_by_user:
+            latest_subscription_by_user[str(user_id)] = row
+
+    purchases_response = (
+        supabase
+        .table("book_purchases")
+        .select("user_id,amount_paid,purchase_status,purchase_date,payment_method,story_id,transaction_id,created_at")
+        .order("purchase_date", desc=True)
+        .execute()
+    )
+    purchase_summary_by_user: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+        "purchase_count": 0,
+        "total_amount_paid": 0.0,
+    })
+    for row in (purchases_response.data or []):
+        user_id = row.get("user_id")
+        if not user_id:
+            continue
+        key = str(user_id)
+        purchase_summary_by_user[key]["purchase_count"] += 1
+        amount = _safe_parse_amount(row.get("amount_paid"))
+        if amount is not None:
+            purchase_summary_by_user[key]["total_amount_paid"] += amount
+
+    child_profiles_response = supabase.table("child_profiles").select("id,parent_id,first_name,created_at,avatar_url").execute()
+    child_profiles = child_profiles_response.data or []
+    child_count_by_user: Dict[str, int] = defaultdict(int)
+    for row in child_profiles:
+        parent_id = row.get("parent_id")
+        if parent_id:
+            child_count_by_user[str(parent_id)] += 1
+
+    return {
+        "users": users,
+        "stories": stories,
+        "story_count_by_user": story_count_by_user,
+        "latest_login_by_user": latest_login_by_user,
+        "latest_subscription_by_user": latest_subscription_by_user,
+        "purchase_summary_by_user": purchase_summary_by_user,
+        "child_profiles": child_profiles,
+        "child_count_by_user": child_count_by_user,
+    }
+
+
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
     """
     Upload file to Supabase storage with optimization and return public URL.
@@ -502,22 +775,156 @@ async def get_random_template_by_story_world(
 
 @router.get("/admin/users")
 @limiter.limit("30/minute")
-async def get_users(request: Request):
+async def get_users(
+    request: Request,
+    search: Optional[str] = Query(None),
+    account_type: Optional[str] = Query(None),
+    subscription_status: Optional[str] = Query(None),
+    registered_from: Optional[str] = Query(None),
+    registered_to: Optional[str] = Query(None),
+    story_count_min: Optional[int] = Query(None, ge=0),
+    story_count_max: Optional[int] = Query(None, ge=0),
+):
     """Get users list for admin user management table"""
     supabase = get_supabase_client()
 
     try:
-        response = (
-            supabase
-            .table("users")
-            .select("id,email,first_name,last_name,avatar_url,role,subscription_status,credit,created_at")
-            .order("created_at", desc=True)
-            .execute()
+        registered_from_dt = _safe_parse_datetime(registered_from)
+        registered_to_dt = _safe_parse_datetime(registered_to)
+        context = _fetch_user_admin_context(supabase)
+        summaries = [
+            _build_user_summary(
+                user_row=row,
+                story_count_by_user=context["story_count_by_user"],
+                latest_login_by_user=context["latest_login_by_user"],
+                latest_subscription_by_user=context["latest_subscription_by_user"],
+                purchase_summary_by_user=context["purchase_summary_by_user"],
+                child_count_by_user=context["child_count_by_user"],
+            )
+            for row in context["users"]
+        ]
+
+        filtered = _filter_user_summaries(
+            summaries=summaries,
+            search=search,
+            account_type=account_type,
+            subscription_status=subscription_status,
+            registered_from=registered_from_dt,
+            registered_to=registered_to_dt,
+            story_count_min=story_count_min,
+            story_count_max=story_count_max,
         )
-        return {"success": True, "data": response.data or []}
+
+        return {
+            "success": True,
+            "data": filtered,
+            "meta": {
+                "total": len(filtered),
+                "filters": {
+                    "search": search,
+                    "account_type": account_type,
+                    "subscription_status": subscription_status,
+                    "registered_from": registered_from,
+                    "registered_to": registered_to,
+                    "story_count_min": story_count_min,
+                    "story_count_max": story_count_max,
+                },
+            },
+        }
     except Exception as e:
         logger.error(f"❌ Error fetching users: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch users: {str(e)}")
+
+
+@router.get("/admin/users/{user_id}")
+@limiter.limit("30/minute")
+async def get_user_detail(request: Request, user_id: str):
+    """Get detailed admin profile for a single user."""
+    supabase = get_supabase_client()
+
+    try:
+        context = _fetch_user_admin_context(supabase)
+        user_row = next((row for row in context["users"] if str(row.get("id")) == user_id), None)
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        summary = _build_user_summary(
+            user_row=user_row,
+            story_count_by_user=context["story_count_by_user"],
+            latest_login_by_user=context["latest_login_by_user"],
+            latest_subscription_by_user=context["latest_subscription_by_user"],
+            purchase_summary_by_user=context["purchase_summary_by_user"],
+            child_count_by_user=context["child_count_by_user"],
+        )
+
+        user_stories = [row for row in context["stories"] if str(row.get("user_id")) == user_id]
+        user_stories.sort(key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min, reverse=True)
+
+        child_profiles = [row for row in context["child_profiles"] if str(row.get("parent_id")) == user_id]
+        child_profiles.sort(key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min, reverse=True)
+
+        characters_response = (
+            supabase
+            .table("characters")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        payment_history_response = (
+            supabase
+            .table("book_purchases")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("purchase_date", desc=True)
+            .execute()
+        )
+        generation_history_response = (
+            supabase
+            .table("book_generation_jobs")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        subscriptions_response = (
+            supabase
+            .table("subscriptions")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        auth_history_response = (
+            supabase
+            .table("user_auth_history")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "account_information": {
+                    **summary,
+                    "stripe_customer_id": user_row.get("stripe_customer_id"),
+                    "children": child_profiles,
+                    "subscriptions": subscriptions_response.data or [],
+                    "auth_history": auth_history_response.data or [],
+                },
+                "characters": characters_response.data or [],
+                "story_library": user_stories,
+                "payment_history": payment_history_response.data or [],
+                "generation_history": generation_history_response.data or [],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error fetching user detail {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch user detail: {str(e)}")
 
 
 @router.post("/admin/users")

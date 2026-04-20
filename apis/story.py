@@ -1288,7 +1288,7 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
                 if cleaned_title and cleaned_title not in titles:
                     titles.append(cleaned_title)
         else:
-            prompt = f"Create a short, gentle children’s story title in the style of ‘Anna’s Bedtime Story’ using a 3D character named {body.character_name}, set in a magical {body.story_world}, involving a treasure adventure and {body.special_ability} for ages {body.age_group}."
+            prompt = f"Create a short, gentle children’s story title in the style of ‘Anna’s Bedtime Story’ using a 3D character named {body.character_name}, set in a magical {body.story_world}, involving a treasure adventure and {body.special_ability} for ages {body.age_group}. Title format like this 'Anna’s Bedtime Story' - no prefix and surfix."
 
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
