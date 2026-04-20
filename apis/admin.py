@@ -353,7 +353,7 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         user["credit"] = user.get("credit")
         user["stripe_customer_id"] = user.get("stripe_customer_id")
 
-    stories_response = supabase.table("stories").select("id,user_id,uid,story_title,created_at,status,story_type,character_id").execute()
+    stories_response = supabase.table("stories").select("uid,user_id,story_title,created_at,status,story_type,character_id").execute()
     stories = stories_response.data or []
     story_count_by_user: Dict[str, int] = defaultdict(int)
     for row in stories:
