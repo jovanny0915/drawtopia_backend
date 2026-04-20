@@ -338,7 +338,7 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
     # Fetch users from Supabase 'users' table (view of auth.users)
     users_response = supabase.table("users").select(
-        "id,email,created_at,last_sign_in_at,user_metadata"
+        "id,email,created_at,user_metadata"
     ).order("created_at", desc=True).execute()
     users = users_response.data or []
 
@@ -349,7 +349,7 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         user["last_name"] = meta.get("last_name")
         user["avatar_url"] = meta.get("avatar_url")
         user["role"] = meta.get("role")
-        user["last_login"] = user.get("last_sign_in_at")
+        user["last_login"] = None
         user["subscription_status"] = meta.get("subscription_status")
         user["subscription_expires"] = meta.get("subscription_expires")
         user["credit"] = meta.get("credit")
