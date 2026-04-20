@@ -335,17 +335,25 @@ def _filter_user_summaries(
 
 
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
-    users_response = (
-        supabase
-        .table("users")
-        .select(
-            "id,email,first_name,last_name,avatar_url,role,subscription_status,"
-            "subscription_expires,credit,created_at,last_login,stripe_customer_id"
-        )
-        .order("created_at", desc=True)
-        .execute()
-    )
+
+    # Fetch users from Supabase auth.users table
+    users_response = supabase.table("auth.users").select(
+        "id,email,created_at,last_sign_in_at,user_metadata"
+    ).order("created_at", desc=True).execute()
     users = users_response.data or []
+
+    # Unpack user_metadata for first_name, last_name, avatar_url if present
+    for user in users:
+        meta = user.get("user_metadata") or {}
+        user["first_name"] = meta.get("first_name")
+        user["last_name"] = meta.get("last_name")
+        user["avatar_url"] = meta.get("avatar_url")
+        user["role"] = meta.get("role")
+        user["last_login"] = user.get("last_sign_in_at")
+        user["subscription_status"] = meta.get("subscription_status")
+        user["subscription_expires"] = meta.get("subscription_expires")
+        user["credit"] = meta.get("credit")
+        user["stripe_customer_id"] = meta.get("stripe_customer_id")
 
     stories_response = supabase.table("stories").select("id,user_id,uid,story_title,created_at,status,story_type,character_id").execute()
     stories = stories_response.data or []
