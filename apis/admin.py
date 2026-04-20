@@ -336,8 +336,8 @@ def _filter_user_summaries(
 
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
-    # Fetch users from Supabase auth.users table
-    users_response = supabase.table("auth.users").select(
+    # Fetch users from public.users table (not auth.users)
+    users_response = supabase.table("users").select(
         "id,email,created_at,last_sign_in_at,user_metadata"
     ).order("created_at", desc=True).execute()
     users = users_response.data or []
