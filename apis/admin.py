@@ -337,30 +337,21 @@ def _filter_user_summaries(
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
     # Fetch users from Supabase 'users' table (view of auth.users)
-    # Fetch users from 'users' table (basic info)
+    # Fetch users from 'users' table (Supabase auth exposes first_name, last_name, avatar_url, etc. as columns)
     users_response = supabase.table("users").select(
-        "id,email,created_at"
+        "id,email,created_at,first_name,last_name,avatar_url,role,subscription_status,subscription_expires,credit,stripe_customer_id"
     ).order("created_at", desc=True).execute()
     users = users_response.data or []
 
-    # Fetch user_metadata from auth.users
-    auth_users_response = supabase.table("auth.users").select(
-        "id,user_metadata"
-    ).execute()
-    auth_users = {u["id"]: u for u in (auth_users_response.data or [])}
-
-    # Merge user_metadata into users
+    # Set last_login to None for compatibility. All other fields come from users table only.
     for user in users:
-        meta = (auth_users.get(user["id"], {}).get("user_metadata") or {})
-        user["first_name"] = meta.get("first_name")
-        user["last_name"] = meta.get("last_name")
-        user["avatar_url"] = meta.get("avatar_url")
-        user["role"] = meta.get("role")
         user["last_login"] = None
-        user["subscription_status"] = meta.get("subscription_status")
-        user["subscription_expires"] = meta.get("subscription_expires")
-        user["credit"] = meta.get("credit")
-        user["stripe_customer_id"] = meta.get("stripe_customer_id")
+        # Ensure these fields are only from users table
+        user["role"] = user.get("role")
+        user["subscription_status"] = user.get("subscription_status")
+        user["subscription_expires"] = user.get("subscription_expires")
+        user["credit"] = user.get("credit")
+        user["stripe_customer_id"] = user.get("stripe_customer_id")
 
     stories_response = supabase.table("stories").select("id,user_id,uid,story_title,created_at,status,story_type,character_id").execute()
     stories = stories_response.data or []
