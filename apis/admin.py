@@ -391,26 +391,19 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         if user_id and str(user_id) not in latest_subscription_by_user:
             latest_subscription_by_user[str(user_id)] = row
 
-    purchases_response = (
-        supabase
-        .table("book_purchases")
-        .select("user_id,amount_paid,purchase_status,purchase_date,payment_method,story_id,transaction_id,created_at")
-        .order("purchase_date", desc=True)
-        .execute()
-    )
+
+    # Calculate purchase summary by user using stories.purchased
     purchase_summary_by_user: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
         "purchase_count": 0,
-        "total_amount_paid": 0.0,
+        "total_amount_paid": 0.0,  # No amount info in stories, so always 0.0
     })
-    for row in (purchases_response.data or []):
+    for row in stories:
         user_id = row.get("user_id")
         if not user_id:
             continue
         key = str(user_id)
-        purchase_summary_by_user[key]["purchase_count"] += 1
-        amount = _safe_parse_amount(row.get("amount_paid"))
-        if amount is not None:
-            purchase_summary_by_user[key]["total_amount_paid"] += amount
+        if row.get("purchased"):
+            purchase_summary_by_user[key]["purchase_count"] += 1
 
     child_profiles_response = supabase.table("child_profiles").select("id,parent_id,first_name,created_at,avatar_url").execute()
     child_profiles = child_profiles_response.data or []
