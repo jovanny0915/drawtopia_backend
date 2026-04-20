@@ -337,21 +337,15 @@ def _filter_user_summaries(
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
     # Fetch users from Supabase 'users' table (view of auth.users)
-    # Fetch users from 'users' table, then join with 'auth.users' to get user_metadata
+    # Fetch users from 'users' table (Supabase exposes user_metadata here)
     users_response = supabase.table("users").select(
-        "id,email,created_at"
+        "id,email,created_at,user_metadata"
     ).order("created_at", desc=True).execute()
     users = users_response.data or []
 
-    # Fetch auth.users for user_metadata
-    auth_users_response = supabase.table("auth.users").select(
-        "id,user_metadata"
-    ).execute()
-    auth_users = {u["id"]: u for u in (auth_users_response.data or [])}
-
-    # Merge user_metadata into users
+    # Unpack user_metadata for first_name, last_name, avatar_url if present
     for user in users:
-        meta = (auth_users.get(user["id"], {}).get("user_metadata") or {})
+        meta = user.get("user_metadata") or {}
         user["first_name"] = meta.get("first_name")
         user["last_name"] = meta.get("last_name")
         user["avatar_url"] = meta.get("avatar_url")
