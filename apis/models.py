@@ -86,6 +86,7 @@ class StoryTitlesRequest(BaseModel):
     character_style: Optional[str] = "cartoon"  # 3d, cartoon, anime
     story_format: Optional[str] = "story"  # story, interactive
     age_group: Optional[str] = "7-10"
+    learning_theme: Optional[str] = None  # e.g. display name from story theme (session)
 
 
 class SaveStoryDraftRequest(BaseModel):
