@@ -349,6 +349,33 @@ def _filter_user_summaries(
     return filtered
 
 
+def _resolve_story_owner_user_id(
+    story_row: Dict[str, Any],
+    child_parent_by_id: Dict[str, str],
+) -> Optional[str]:
+    user_id = story_row.get("user_id")
+    if user_id:
+        return str(user_id)
+
+    child_profile_id = story_row.get("child_profile_id")
+    if child_profile_id is None:
+        return None
+
+    return child_parent_by_id.get(str(child_profile_id))
+
+
+def _build_story_count_by_user(
+    stories: List[Dict[str, Any]],
+    child_parent_by_id: Dict[str, str],
+) -> Dict[str, int]:
+    story_count_by_user: Dict[str, int] = defaultdict(int)
+    for row in stories:
+        owner_user_id = _resolve_story_owner_user_id(row, child_parent_by_id)
+        if owner_user_id:
+            story_count_by_user[owner_user_id] += 1
+    return story_count_by_user
+
+
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
     # Fetch users from Supabase 'users' table (view of auth.users)
@@ -368,13 +395,22 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         user["credit"] = user.get("credit")
         user["stripe_customer_id"] = user.get("stripe_customer_id")
 
-    stories_response = supabase.table("stories").select("uid,user_id,story_title,created_at,status,story_type,character_id").execute()
+    child_profiles_response = supabase.table("child_profiles").select("id,parent_id,first_name,created_at,avatar_url").execute()
+    child_profiles = child_profiles_response.data or []
+    child_parent_by_id: Dict[str, str] = {}
+    child_count_by_user: Dict[str, int] = defaultdict(int)
+    for row in child_profiles:
+        child_id = row.get("id")
+        parent_id = row.get("parent_id")
+        if child_id and parent_id:
+            child_parent_by_id[str(child_id)] = str(parent_id)
+            child_count_by_user[str(parent_id)] += 1
+
+    stories_response = supabase.table("stories").select(
+        "uid,user_id,child_profile_id,story_title,created_at,status,story_type,character_id,purchased"
+    ).execute()
     stories = stories_response.data or []
-    story_count_by_user: Dict[str, int] = defaultdict(int)
-    for row in stories:
-        user_id = row.get("user_id")
-        if user_id:
-            story_count_by_user[str(user_id)] += 1
+    story_count_by_user = _build_story_count_by_user(stories, child_parent_by_id)
 
     auth_history_response = (
         supabase
@@ -413,20 +449,12 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         "total_amount_paid": 0.0,  # No amount info in stories, so always 0.0
     })
     for row in stories:
-        user_id = row.get("user_id")
-        if not user_id:
+        owner_user_id = _resolve_story_owner_user_id(row, child_parent_by_id)
+        if not owner_user_id:
             continue
-        key = str(user_id)
+        key = str(owner_user_id)
         if row.get("purchased"):
             purchase_summary_by_user[key]["purchase_count"] += 1
-
-    child_profiles_response = supabase.table("child_profiles").select("id,parent_id,first_name,created_at,avatar_url").execute()
-    child_profiles = child_profiles_response.data or []
-    child_count_by_user: Dict[str, int] = defaultdict(int)
-    for row in child_profiles:
-        parent_id = row.get("parent_id")
-        if parent_id:
-            child_count_by_user[str(parent_id)] += 1
 
     return {
         "users": users,
@@ -436,6 +464,7 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
         "latest_subscription_by_user": latest_subscription_by_user,
         "purchase_summary_by_user": purchase_summary_by_user,
         "child_profiles": child_profiles,
+        "child_parent_by_id": child_parent_by_id,
         "child_count_by_user": child_count_by_user,
     }
 
@@ -871,7 +900,11 @@ async def get_user_detail(request: Request, user_id: str):
             child_count_by_user=context["child_count_by_user"],
         )
 
-        user_stories = [row for row in context["stories"] if str(row.get("user_id")) == user_id]
+        user_stories = [
+            row
+            for row in context["stories"]
+            if _resolve_story_owner_user_id(row, context["child_parent_by_id"]) == user_id
+        ]
         user_stories.sort(key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min, reverse=True)
 
         child_profiles = [row for row in context["child_profiles"] if str(row.get("parent_id")) == user_id]
