@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Set
 from rate_limiter import limiter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import random
 import os
@@ -175,7 +175,7 @@ def _normalize_text_filter(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
-def _safe_parse_datetime(value: Optional[Any]) -> Optional[datetime]:
+def _safe_parse_datetime(value: Optional[Any], end_of_day: bool = False) -> Optional[datetime]:
     if not value:
         return None
     if isinstance(value, datetime):
@@ -185,10 +185,23 @@ def _safe_parse_datetime(value: Optional[Any]) -> Optional[datetime]:
         if not candidate:
             return None
         try:
+            if len(candidate) == 10:
+                parsed_date = datetime.fromisoformat(candidate)
+                if end_of_day:
+                    return parsed_date + timedelta(days=1) - timedelta(microseconds=1)
+                return parsed_date
             return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
         except ValueError:
             return None
     return None
+
+
+def _normalize_datetime_for_compare(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _safe_parse_amount(value: Optional[Any]) -> Optional[float]:
@@ -279,9 +292,11 @@ def _build_user_summary(
 def _matches_date_range(value: Optional[Any], start: Optional[datetime], end: Optional[datetime]) -> bool:
     if start is None and end is None:
         return True
-    candidate = _safe_parse_datetime(value)
+    candidate = _normalize_datetime_for_compare(_safe_parse_datetime(value))
     if candidate is None:
         return False
+    start = _normalize_datetime_for_compare(start)
+    end = _normalize_datetime_for_compare(end)
     if start is not None and candidate < start:
         return False
     if end is not None and candidate > end:
@@ -789,7 +804,7 @@ async def get_users(
 
     try:
         registered_from_dt = _safe_parse_datetime(registered_from)
-        registered_to_dt = _safe_parse_datetime(registered_to)
+        registered_to_dt = _safe_parse_datetime(registered_to, end_of_day=True)
         context = _fetch_user_admin_context(supabase)
         summaries = [
             _build_user_summary(
