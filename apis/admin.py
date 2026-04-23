@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any, Set
 from rate_limiter import limiter
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+import json
 import random
 import os
 import logging
@@ -376,6 +377,316 @@ def _build_story_count_by_user(
     return story_count_by_user
 
 
+INTERACTIVE_STORY_FORMATS = frozenset({
+    "interactive",
+    "interactive_search",
+    "interactive_story",
+    "search",
+    "search_and_find",
+    "search-and-find",
+    "intersearch",
+})
+
+
+def _normalize_story_format(value: Optional[Any]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized or None
+
+
+def _effective_story_format(story_row: Dict[str, Any], job_row: Optional[Dict[str, Any]] = None) -> str:
+    for raw_value in (
+        story_row.get("story_format"),
+        story_row.get("story_type"),
+        (job_row or {}).get("job_type"),
+    ):
+        normalized = _normalize_story_format(raw_value)
+        if normalized in INTERACTIVE_STORY_FORMATS:
+            return "interactive_search"
+        if normalized in {"story", "story_adventure", "adventure_story", "adventure"}:
+            return "story_adventure"
+    return "story_adventure"
+
+
+def _effective_story_status(story_row: Dict[str, Any], job_row: Optional[Dict[str, Any]] = None) -> str:
+    job_status = _normalize_text_filter((job_row or {}).get("status"))
+    if job_status in {"processing", "pending"}:
+        return "generating"
+    if job_status in {"completed", "failed", "cancelled"}:
+        return "failed" if job_status == "cancelled" else job_status
+
+    story_status = _normalize_text_filter(story_row.get("status"))
+    if story_status in {"draft", "generating", "completed", "failed"}:
+        return story_status
+    return "draft"
+
+
+def _calculate_job_duration_seconds(job_row: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not isinstance(job_row, dict):
+        return None
+
+    started_at = _safe_parse_datetime(job_row.get("started_at"))
+    completed_at = _safe_parse_datetime(job_row.get("completed_at"))
+    if started_at is None or completed_at is None:
+        return None
+
+    started_at = _normalize_datetime_for_compare(started_at)
+    completed_at = _normalize_datetime_for_compare(completed_at)
+    if started_at is None or completed_at is None or completed_at < started_at:
+        return None
+
+    return round((completed_at - started_at).total_seconds(), 2)
+
+
+def _group_jobs_by_book_id(job_rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    jobs_by_book_id: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for job_row in job_rows:
+        book_id = job_row.get("book_id")
+        if book_id is None:
+            continue
+        jobs_by_book_id[str(book_id)].append(job_row)
+
+    for book_id, rows in jobs_by_book_id.items():
+        rows.sort(
+            key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min,
+            reverse=True,
+        )
+        jobs_by_book_id[book_id] = rows
+
+    return jobs_by_book_id
+
+
+def _pick_latest_story_job(
+    story_row: Dict[str, Any],
+    jobs_by_book_id: Dict[str, List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    story_id = story_row.get("id")
+    if story_id is None:
+        return None
+    jobs = jobs_by_book_id.get(str(story_id)) or []
+    return jobs[0] if jobs else None
+
+
+def _extract_story_page_texts(story_row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    story_content = story_row.get("story_content")
+    if story_content is None:
+        return []
+
+    parsed_content: Any = story_content
+    if isinstance(parsed_content, str):
+        trimmed = parsed_content.strip()
+        if not trimmed:
+            return []
+        try:
+            parsed_content = json.loads(trimmed)
+        except Exception:
+            return [{"page_number": 1, "text": trimmed, "audio_url": None}]
+
+    pages = parsed_content.get("pages") if isinstance(parsed_content, dict) else parsed_content
+    if not isinstance(pages, list):
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for index, page in enumerate(pages, start=1):
+        if isinstance(page, str):
+            text = page.strip()
+            audio_url = None
+        elif isinstance(page, dict):
+            text = str(
+                page.get("text")
+                or page.get("story")
+                or page.get("pageText")
+                or ""
+            ).strip()
+            audio_url = page.get("audioUrl") or page.get("audio_url")
+        else:
+            continue
+
+        if not text:
+            continue
+
+        page_number = page.get("pageNumber") if isinstance(page, dict) else index
+        try:
+            normalized_page_number = int(page_number)
+        except Exception:
+            normalized_page_number = index
+
+        results.append({
+            "page_number": normalized_page_number,
+            "text": text,
+            "audio_url": audio_url,
+        })
+
+    return results
+
+
+def _first_non_empty(*values: Any) -> Optional[str]:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _listify_urls(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _build_story_pages(
+    story_row: Dict[str, Any],
+    story_format: str,
+    story_page_texts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    pages: List[Dict[str, Any]] = []
+
+    for label, image_url in (
+        ("Copyright", _first_non_empty(story_row.get("copyright_image"), story_row.get("copyright_page_image"))),
+        ("Dedication", _first_non_empty(story_row.get("dedication_image"), story_row.get("dedication_page_image"))),
+    ):
+        if image_url:
+            pages.append({
+                "key": label.lower(),
+                "label": label,
+                "image_url": image_url,
+                "page_number": None,
+                "text": None,
+            })
+
+    scene_images = _listify_urls(story_row.get("scene_images"))
+    item_label = "Scene" if story_format == "interactive_search" else "Page"
+    for index, image_url in enumerate(scene_images, start=1):
+        matching_text = next((item for item in story_page_texts if item.get("page_number") == index), None)
+        pages.append({
+            "key": f"scene-{index}",
+            "label": f"{item_label} {index}",
+            "image_url": image_url,
+            "page_number": index,
+            "text": matching_text.get("text") if matching_text else None,
+        })
+
+    for label, image_url in (
+        ("Last Words", _first_non_empty(story_row.get("last_word_page_image"), story_row.get("last_words_page_image"))),
+        ("Final Page", _first_non_empty(story_row.get("last_admin_page_image"), story_row.get("last_story_page_image"))),
+        ("Back Cover", _first_non_empty(story_row.get("back_cover_image"), story_row.get("back_page_image"))),
+    ):
+        if image_url:
+            pages.append({
+                "key": label.lower().replace(" ", "-"),
+                "label": label,
+                "image_url": image_url,
+                "page_number": None,
+                "text": None,
+            })
+
+    return pages
+
+
+def _build_story_owner_summary(
+    story_row: Dict[str, Any],
+    users_by_id: Dict[str, Dict[str, Any]],
+    child_parent_by_id: Dict[str, str],
+    child_profiles_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    owner_user_id = _resolve_story_owner_user_id(story_row, child_parent_by_id)
+    owner = users_by_id.get(str(owner_user_id)) if owner_user_id else None
+    child_profile_id = story_row.get("child_profile_id")
+    child_profile = child_profiles_by_id.get(str(child_profile_id)) if child_profile_id is not None else None
+
+    owner_name = _full_name(owner or {})
+    if not owner_name:
+        owner_name = (owner or {}).get("email") or "Unknown user"
+
+    return {
+        "user_id": str(owner_user_id) if owner_user_id else None,
+        "user_email": (owner or {}).get("email"),
+        "user_name": owner_name,
+        "child_name": (child_profile or {}).get("first_name"),
+    }
+
+
+def _build_admin_story_summary(
+    story_row: Dict[str, Any],
+    users_by_id: Dict[str, Dict[str, Any]],
+    child_parent_by_id: Dict[str, str],
+    child_profiles_by_id: Dict[str, Dict[str, Any]],
+    characters_by_id: Dict[str, Dict[str, Any]],
+    jobs_by_book_id: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    latest_job = _pick_latest_story_job(story_row, jobs_by_book_id)
+    owner_summary = _build_story_owner_summary(
+        story_row=story_row,
+        users_by_id=users_by_id,
+        child_parent_by_id=child_parent_by_id,
+        child_profiles_by_id=child_profiles_by_id,
+    )
+    character = characters_by_id.get(str(story_row.get("character_id"))) if story_row.get("character_id") is not None else None
+    story_format = _effective_story_format(story_row, latest_job)
+
+    character_name = (
+        story_row.get("character_name")
+        or (character or {}).get("character_name")
+        or "Untitled character"
+    )
+
+    return {
+        "id": str(story_row.get("id")) if story_row.get("id") is not None else "",
+        "uid": story_row.get("uid"),
+        "story_title": story_row.get("story_title") or "Untitled story",
+        "character_name": character_name,
+        "format": story_format,
+        "status": _effective_story_status(story_row, latest_job),
+        "created_at": story_row.get("created_at"),
+        "generation_duration_seconds": _calculate_job_duration_seconds(latest_job),
+        "user_id": owner_summary["user_id"],
+        "user_email": owner_summary["user_email"],
+        "user_name": owner_summary["user_name"],
+        "child_name": owner_summary["child_name"],
+        "cover_image": story_row.get("story_cover"),
+        "error_message": (latest_job or {}).get("error_message"),
+    }
+
+
+def _filter_admin_story_summaries(
+    summaries: List[Dict[str, Any]],
+    search: Optional[str],
+    status: Optional[str],
+    format_type: Optional[str],
+    created_from: Optional[datetime],
+    created_to: Optional[datetime],
+) -> List[Dict[str, Any]]:
+    normalized_search = _normalize_text_filter(search)
+    normalized_status = _normalize_text_filter(status)
+    normalized_format = _normalize_story_format(format_type)
+
+    filtered: List[Dict[str, Any]] = []
+    for summary in summaries:
+        if normalized_search:
+            haystack = " ".join([
+                str(summary.get("user_email") or ""),
+                str(summary.get("character_name") or ""),
+                str(summary.get("story_title") or ""),
+            ]).lower()
+            if normalized_search not in haystack:
+                continue
+
+        if normalized_status and _normalize_text_filter(summary.get("status")) != normalized_status:
+            continue
+
+        if normalized_format and _normalize_story_format(summary.get("format")) != normalized_format:
+            continue
+
+        if not _matches_date_range(summary.get("created_at"), created_from, created_to):
+            continue
+
+        filtered.append(summary)
+
+    return filtered
+
+
 def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
     # Fetch users from Supabase 'users' table (view of auth.users)
@@ -662,6 +973,220 @@ async def get_user_auth_counts_by_day(request: Request, days: int = Query(90, ge
     except Exception as e:
         logger.error(f"Error fetching user auth counts by day: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch user auth counts: {str(e)}")
+
+
+@router.get("/admin/stories")
+@limiter.limit("30/minute")
+async def get_admin_stories(
+    request: Request,
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    format_type: Optional[str] = Query(None),
+    created_from: Optional[str] = Query(None),
+    created_to: Optional[str] = Query(None),
+):
+    """Get platform-wide admin story summaries."""
+    supabase = get_supabase_client()
+
+    try:
+        created_from_dt = _safe_parse_datetime(created_from)
+        created_to_dt = _safe_parse_datetime(created_to, end_of_day=True)
+        context = _fetch_user_admin_context(supabase)
+
+        stories_response = supabase.table("stories").select("*").order("created_at", desc=True).execute()
+        stories = stories_response.data or []
+
+        characters_response = supabase.table("characters").select(
+            "id,character_name,original_image_url,enhanced_images"
+        ).execute()
+        characters = characters_response.data or []
+        characters_by_id = {str(row.get("id")): row for row in characters if row.get("id") is not None}
+
+        jobs_response = (
+            supabase
+            .table("book_generation_jobs")
+            .select("id,book_id,job_type,status,created_at,started_at,completed_at,error_message")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        jobs_by_book_id = _group_jobs_by_book_id(jobs_response.data or [])
+
+        users_by_id = {
+            str(row.get("id")): row
+            for row in context["users"]
+            if row.get("id") is not None
+        }
+        child_profiles_by_id = {
+            str(row.get("id")): row
+            for row in context["child_profiles"]
+            if row.get("id") is not None
+        }
+
+        summaries = [
+            _build_admin_story_summary(
+                story_row=story_row,
+                users_by_id=users_by_id,
+                child_parent_by_id=context["child_parent_by_id"],
+                child_profiles_by_id=child_profiles_by_id,
+                characters_by_id=characters_by_id,
+                jobs_by_book_id=jobs_by_book_id,
+            )
+            for story_row in stories
+        ]
+
+        filtered = _filter_admin_story_summaries(
+            summaries=summaries,
+            search=search,
+            status=status,
+            format_type=format_type,
+            created_from=created_from_dt,
+            created_to=created_to_dt,
+        )
+
+        return {
+            "success": True,
+            "data": filtered,
+            "meta": {
+                "total": len(filtered),
+                "filters": {
+                    "search": search,
+                    "status": status,
+                    "format_type": format_type,
+                    "created_from": created_from,
+                    "created_to": created_to,
+                },
+            },
+        }
+    except Exception as e:
+        logger.error(f"❌ Error fetching admin stories: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch admin stories: {str(e)}")
+
+
+@router.get("/admin/stories/{story_id}")
+@limiter.limit("30/minute")
+async def get_admin_story_detail(request: Request, story_id: str):
+    """Get a single story detail payload for the admin story modal."""
+    supabase = get_supabase_client()
+
+    try:
+        story_response = supabase.table("stories").select("*").eq("uid", story_id).execute()
+        story_row = story_response.data[0] if story_response.data else None
+
+        if story_row is None:
+            try:
+                numeric_story_id = int(story_id)
+            except ValueError:
+                numeric_story_id = None
+
+            if numeric_story_id is not None:
+                numeric_story_response = supabase.table("stories").select("*").eq("id", numeric_story_id).execute()
+                story_row = numeric_story_response.data[0] if numeric_story_response.data else None
+
+        if story_row is None:
+            raise HTTPException(status_code=404, detail="Story not found")
+
+        context = _fetch_user_admin_context(supabase)
+        users_by_id = {
+            str(row.get("id")): row
+            for row in context["users"]
+            if row.get("id") is not None
+        }
+        child_profiles_by_id = {
+            str(row.get("id")): row
+            for row in context["child_profiles"]
+            if row.get("id") is not None
+        }
+
+        character = None
+        character_id = story_row.get("character_id")
+        if character_id is not None:
+            character_response = (
+                supabase
+                .table("characters")
+                .select("id,character_name,original_image_url,enhanced_images,created_at")
+                .eq("id", character_id)
+                .execute()
+            )
+            character = character_response.data[0] if character_response.data else None
+
+        job_rows_response = (
+            supabase
+            .table("book_generation_jobs")
+            .select("*")
+            .eq("book_id", story_row.get("id"))
+            .order("created_at", desc=True)
+            .execute()
+        )
+        job_rows = job_rows_response.data or []
+        jobs_by_book_id = _group_jobs_by_book_id(job_rows)
+        latest_job = _pick_latest_story_job(story_row, jobs_by_book_id)
+
+        owner_summary = _build_story_owner_summary(
+            story_row=story_row,
+            users_by_id=users_by_id,
+            child_parent_by_id=context["child_parent_by_id"],
+            child_profiles_by_id=child_profiles_by_id,
+        )
+        story_format = _effective_story_format(story_row, latest_job)
+        story_page_texts = _extract_story_page_texts(story_row)
+
+        return {
+            "success": True,
+            "data": {
+                "id": str(story_row.get("id")) if story_row.get("id") is not None else "",
+                "uid": story_row.get("uid"),
+                "story_title": story_row.get("story_title") or "Untitled story",
+                "character_name": (
+                    story_row.get("character_name")
+                    or (character or {}).get("character_name")
+                    or "Untitled character"
+                ),
+                "status": _effective_story_status(story_row, latest_job),
+                "format": story_format,
+                "created_at": story_row.get("created_at"),
+                "generation_duration_seconds": _calculate_job_duration_seconds(latest_job),
+                "owner": {
+                    "user_id": owner_summary["user_id"],
+                    "email": owner_summary["user_email"],
+                    "name": owner_summary["user_name"],
+                },
+                "child_profile": (
+                    child_profiles_by_id.get(str(story_row.get("child_profile_id")))
+                    if story_row.get("child_profile_id") is not None
+                    else None
+                ),
+                "character": {
+                    "id": str((character or {}).get("id")) if (character or {}).get("id") is not None else None,
+                    "character_name": (
+                        (character or {}).get("character_name")
+                        or story_row.get("character_name")
+                    ),
+                    "original_image_url": (
+                        (character or {}).get("original_image_url")
+                        or story_row.get("original_image_url")
+                    ),
+                    "enhanced_images": (
+                        (character or {}).get("enhanced_images")
+                        or story_row.get("enhanced_images")
+                        or []
+                    ),
+                },
+                "cover_image": story_row.get("story_cover"),
+                "pages": _build_story_pages(
+                    story_row=story_row,
+                    story_format=story_format,
+                    story_page_texts=story_page_texts,
+                ),
+                "story_pages_text": story_page_texts,
+                "jobs": job_rows,
+                "raw_story": story_row,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error fetching admin story detail {story_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch admin story detail: {str(e)}")
 
 
 @router.get("/admin/templates")
