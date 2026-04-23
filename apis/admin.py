@@ -929,6 +929,58 @@ def _safe_delete_in(supabase_client, table_name: str, column: str, values: List[
         return 0
 
 
+def _is_missing_table_error(error: Exception, table_name: str) -> bool:
+    message = str(error)
+    return (
+        "PGRST205" in message
+        and "schema cache" in message
+        and table_name in message
+    )
+
+
+def _fetch_generation_jobs_safe(supabase, story_row: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Best-effort job lookup so admin stories still works before the queue schema exists."""
+    try:
+        if story_row is None:
+            response = (
+                supabase
+                .table("book_generation_jobs")
+                .select("id,book_id,job_type,status,created_at,started_at,completed_at,error_message")
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return response.data or []
+
+        response = (
+            supabase
+            .table("book_generation_jobs")
+            .select("*")
+            .eq("book_id", story_row.get("id"))
+            .order("created_at", desc=True)
+            .execute()
+        )
+        job_rows = response.data or []
+
+        if not job_rows and story_row.get("job_id") is not None:
+            legacy_response = (
+                supabase
+                .table("book_generation_jobs")
+                .select("*")
+                .eq("id", story_row.get("job_id"))
+                .execute()
+            )
+            job_rows = legacy_response.data or []
+
+        return job_rows
+    except Exception as e:
+        if _is_missing_table_error(e, "public.book_generation_jobs"):
+            logger.warning(
+                "book_generation_jobs table is unavailable; admin stories will load without job metadata."
+            )
+            return []
+        raise
+
+
 # ==================== API Endpoints ====================
 
 @router.get("/admin/analysis/story-counts-by-day")
@@ -1046,14 +1098,7 @@ async def get_admin_stories(
         characters = characters_response.data or []
         characters_by_id = {str(row.get("id")): row for row in characters if row.get("id") is not None}
 
-        jobs_response = (
-            supabase
-            .table("book_generation_jobs")
-            .select("id,book_id,job_type,status,created_at,started_at,completed_at,error_message")
-            .order("created_at", desc=True)
-            .execute()
-        )
-        job_rows = jobs_response.data or []
+        job_rows = _fetch_generation_jobs_safe(supabase)
         jobs_by_book_id = _group_jobs_by_book_id(job_rows)
         jobs_by_id = _index_jobs_by_id(job_rows)
 
@@ -1156,24 +1201,7 @@ async def get_admin_story_detail(request: Request, story_id: str):
             )
             character = character_response.data[0] if character_response.data else None
 
-        job_rows_response = (
-            supabase
-            .table("book_generation_jobs")
-            .select("*")
-            .eq("book_id", story_row.get("id"))
-            .order("created_at", desc=True)
-            .execute()
-        )
-        job_rows = job_rows_response.data or []
-        if not job_rows and story_row.get("job_id") is not None:
-            legacy_job_response = (
-                supabase
-                .table("book_generation_jobs")
-                .select("*")
-                .eq("id", story_row.get("job_id"))
-                .execute()
-            )
-            job_rows = legacy_job_response.data or []
+        job_rows = _fetch_generation_jobs_safe(supabase, story_row=story_row)
         jobs_by_book_id = _group_jobs_by_book_id(job_rows)
         jobs_by_id = _index_jobs_by_id(job_rows)
         latest_job = _pick_latest_story_job(story_row, jobs_by_book_id, jobs_by_id)
