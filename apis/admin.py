@@ -205,6 +205,11 @@ def _normalize_datetime_for_compare(value: Optional[datetime]) -> Optional[datet
     return value.astimezone(timezone.utc)
 
 
+def _datetime_sort_key(value: Optional[Any]) -> datetime:
+    normalized = _normalize_datetime_for_compare(_safe_parse_datetime(value))
+    return normalized or datetime.min.replace(tzinfo=timezone.utc)
+
+
 def _safe_parse_amount(value: Optional[Any]) -> Optional[float]:
     if value is None or value == "":
         return None
@@ -395,31 +400,46 @@ def _normalize_story_format(value: Optional[Any]) -> Optional[str]:
     return normalized or None
 
 
+def _canonical_story_format(value: Optional[Any]) -> Optional[str]:
+    normalized = _normalize_story_format(value)
+    if normalized is None:
+        return None
+    if normalized in INTERACTIVE_STORY_FORMATS:
+        return "interactive_search"
+    if normalized in {"story", "story_adventure", "adventure_story", "adventure"}:
+        return "story_adventure"
+    return normalized
+
+
 def _effective_story_format(story_row: Dict[str, Any], job_row: Optional[Dict[str, Any]] = None) -> str:
     for raw_value in (
         story_row.get("story_format"),
         story_row.get("story_type"),
         (job_row or {}).get("job_type"),
     ):
-        normalized = _normalize_story_format(raw_value)
-        if normalized in INTERACTIVE_STORY_FORMATS:
-            return "interactive_search"
-        if normalized in {"story", "story_adventure", "adventure_story", "adventure"}:
-            return "story_adventure"
+        canonical = _canonical_story_format(raw_value)
+        if canonical in {"interactive_search", "story_adventure"}:
+            return canonical
     return "story_adventure"
 
 
-def _effective_story_status(story_row: Dict[str, Any], job_row: Optional[Dict[str, Any]] = None) -> str:
-    job_status = _normalize_text_filter((job_row or {}).get("status"))
-    if job_status in {"processing", "pending"}:
+def _normalize_story_status(value: Optional[Any]) -> Optional[str]:
+    normalized = _normalize_text_filter(value)
+    if normalized in {"pending", "processing"}:
         return "generating"
-    if job_status in {"completed", "failed", "cancelled"}:
-        return "failed" if job_status == "cancelled" else job_status
+    if normalized == "cancelled":
+        return "failed"
+    if normalized in {"draft", "generating", "completed", "failed"}:
+        return normalized
+    return None
 
-    story_status = _normalize_text_filter(story_row.get("status"))
-    if story_status in {"draft", "generating", "completed", "failed"}:
-        return story_status
-    return "draft"
+
+def _effective_story_status(story_row: Dict[str, Any], job_row: Optional[Dict[str, Any]] = None) -> str:
+    return (
+        _normalize_story_status((job_row or {}).get("status"))
+        or _normalize_story_status(story_row.get("status"))
+        or "draft"
+    )
 
 
 def _calculate_job_duration_seconds(job_row: Optional[Dict[str, Any]]) -> Optional[float]:
@@ -449,7 +469,7 @@ def _group_jobs_by_book_id(job_rows: List[Dict[str, Any]]) -> Dict[str, List[Dic
 
     for book_id, rows in jobs_by_book_id.items():
         rows.sort(
-            key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min,
+            key=lambda row: _datetime_sort_key(row.get("created_at")),
             reverse=True,
         )
         jobs_by_book_id[book_id] = rows
@@ -457,15 +477,32 @@ def _group_jobs_by_book_id(job_rows: List[Dict[str, Any]]) -> Dict[str, List[Dic
     return jobs_by_book_id
 
 
+def _index_jobs_by_id(job_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    jobs_by_id: Dict[str, Dict[str, Any]] = {}
+    for job_row in job_rows:
+        job_id = job_row.get("id")
+        if job_id is None:
+            continue
+        jobs_by_id[str(job_id)] = job_row
+    return jobs_by_id
+
+
 def _pick_latest_story_job(
     story_row: Dict[str, Any],
     jobs_by_book_id: Dict[str, List[Dict[str, Any]]],
+    jobs_by_id: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     story_id = story_row.get("id")
-    if story_id is None:
-        return None
-    jobs = jobs_by_book_id.get(str(story_id)) or []
-    return jobs[0] if jobs else None
+    if story_id is not None:
+        jobs = jobs_by_book_id.get(str(story_id)) or []
+        if jobs:
+            return jobs[0]
+
+    story_job_id = story_row.get("job_id")
+    if story_job_id is not None and jobs_by_id is not None:
+        return jobs_by_id.get(str(story_job_id))
+
+    return None
 
 
 def _extract_story_page_texts(story_row: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -590,10 +627,14 @@ def _build_story_owner_summary(
     users_by_id: Dict[str, Dict[str, Any]],
     child_parent_by_id: Dict[str, str],
     child_profiles_by_id: Dict[str, Dict[str, Any]],
+    character: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     owner_user_id = _resolve_story_owner_user_id(story_row, child_parent_by_id)
+    if owner_user_id is None and character:
+        owner_user_id = character.get("user_id") or child_parent_by_id.get(str(character.get("child_profile_id")))
+
     owner = users_by_id.get(str(owner_user_id)) if owner_user_id else None
-    child_profile_id = story_row.get("child_profile_id")
+    child_profile_id = story_row.get("child_profile_id") or (character or {}).get("child_profile_id")
     child_profile = child_profiles_by_id.get(str(child_profile_id)) if child_profile_id is not None else None
 
     owner_name = _full_name(owner or {})
@@ -615,15 +656,17 @@ def _build_admin_story_summary(
     child_profiles_by_id: Dict[str, Dict[str, Any]],
     characters_by_id: Dict[str, Dict[str, Any]],
     jobs_by_book_id: Dict[str, List[Dict[str, Any]]],
+    jobs_by_id: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
-    latest_job = _pick_latest_story_job(story_row, jobs_by_book_id)
+    latest_job = _pick_latest_story_job(story_row, jobs_by_book_id, jobs_by_id)
+    character = characters_by_id.get(str(story_row.get("character_id"))) if story_row.get("character_id") is not None else None
     owner_summary = _build_story_owner_summary(
         story_row=story_row,
         users_by_id=users_by_id,
         child_parent_by_id=child_parent_by_id,
         child_profiles_by_id=child_profiles_by_id,
+        character=character,
     )
-    character = characters_by_id.get(str(story_row.get("character_id"))) if story_row.get("character_id") is not None else None
     story_format = _effective_story_format(story_row, latest_job)
 
     character_name = (
@@ -635,7 +678,7 @@ def _build_admin_story_summary(
     return {
         "id": str(story_row.get("id")) if story_row.get("id") is not None else "",
         "uid": story_row.get("uid"),
-        "story_title": story_row.get("story_title") or "Untitled story",
+        "story_title": _first_non_empty(story_row.get("story_title"), story_row.get("title")) or "Untitled story",
         "character_name": character_name,
         "format": story_format,
         "status": _effective_story_status(story_row, latest_job),
@@ -645,7 +688,7 @@ def _build_admin_story_summary(
         "user_email": owner_summary["user_email"],
         "user_name": owner_summary["user_name"],
         "child_name": owner_summary["child_name"],
-        "cover_image": story_row.get("story_cover"),
+        "cover_image": _first_non_empty(story_row.get("story_cover"), story_row.get("cover_image")),
         "error_message": (latest_job or {}).get("error_message"),
     }
 
@@ -659,24 +702,25 @@ def _filter_admin_story_summaries(
     created_to: Optional[datetime],
 ) -> List[Dict[str, Any]]:
     normalized_search = _normalize_text_filter(search)
-    normalized_status = _normalize_text_filter(status)
-    normalized_format = _normalize_story_format(format_type)
+    normalized_status = _normalize_story_status(status)
+    normalized_format = _canonical_story_format(format_type)
 
     filtered: List[Dict[str, Any]] = []
     for summary in summaries:
         if normalized_search:
             haystack = " ".join([
                 str(summary.get("user_email") or ""),
+                str(summary.get("user_name") or ""),
                 str(summary.get("character_name") or ""),
                 str(summary.get("story_title") or ""),
             ]).lower()
             if normalized_search not in haystack:
                 continue
 
-        if normalized_status and _normalize_text_filter(summary.get("status")) != normalized_status:
+        if normalized_status and _normalize_story_status(summary.get("status")) != normalized_status:
             continue
 
-        if normalized_format and _normalize_story_format(summary.get("format")) != normalized_format:
+        if normalized_format and _canonical_story_format(summary.get("format")) != normalized_format:
             continue
 
         if not _matches_date_range(summary.get("created_at"), created_from, created_to):
@@ -997,7 +1041,7 @@ async def get_admin_stories(
         stories = stories_response.data or []
 
         characters_response = supabase.table("characters").select(
-            "id,character_name,original_image_url,enhanced_images"
+            "id,user_id,child_profile_id,character_name,original_image_url,enhanced_images"
         ).execute()
         characters = characters_response.data or []
         characters_by_id = {str(row.get("id")): row for row in characters if row.get("id") is not None}
@@ -1009,7 +1053,9 @@ async def get_admin_stories(
             .order("created_at", desc=True)
             .execute()
         )
-        jobs_by_book_id = _group_jobs_by_book_id(jobs_response.data or [])
+        job_rows = jobs_response.data or []
+        jobs_by_book_id = _group_jobs_by_book_id(job_rows)
+        jobs_by_id = _index_jobs_by_id(job_rows)
 
         users_by_id = {
             str(row.get("id")): row
@@ -1030,6 +1076,7 @@ async def get_admin_stories(
                 child_profiles_by_id=child_profiles_by_id,
                 characters_by_id=characters_by_id,
                 jobs_by_book_id=jobs_by_book_id,
+                jobs_by_id=jobs_by_id,
             )
             for story_row in stories
         ]
@@ -1103,7 +1150,7 @@ async def get_admin_story_detail(request: Request, story_id: str):
             character_response = (
                 supabase
                 .table("characters")
-                .select("id,character_name,original_image_url,enhanced_images,created_at")
+                .select("id,user_id,child_profile_id,character_name,original_image_url,enhanced_images,created_at")
                 .eq("id", character_id)
                 .execute()
             )
@@ -1118,14 +1165,25 @@ async def get_admin_story_detail(request: Request, story_id: str):
             .execute()
         )
         job_rows = job_rows_response.data or []
+        if not job_rows and story_row.get("job_id") is not None:
+            legacy_job_response = (
+                supabase
+                .table("book_generation_jobs")
+                .select("*")
+                .eq("id", story_row.get("job_id"))
+                .execute()
+            )
+            job_rows = legacy_job_response.data or []
         jobs_by_book_id = _group_jobs_by_book_id(job_rows)
-        latest_job = _pick_latest_story_job(story_row, jobs_by_book_id)
+        jobs_by_id = _index_jobs_by_id(job_rows)
+        latest_job = _pick_latest_story_job(story_row, jobs_by_book_id, jobs_by_id)
 
         owner_summary = _build_story_owner_summary(
             story_row=story_row,
             users_by_id=users_by_id,
             child_parent_by_id=context["child_parent_by_id"],
             child_profiles_by_id=child_profiles_by_id,
+            character=character,
         )
         story_format = _effective_story_format(story_row, latest_job)
         story_page_texts = _extract_story_page_texts(story_row)
@@ -1135,7 +1193,7 @@ async def get_admin_story_detail(request: Request, story_id: str):
             "data": {
                 "id": str(story_row.get("id")) if story_row.get("id") is not None else "",
                 "uid": story_row.get("uid"),
-                "story_title": story_row.get("story_title") or "Untitled story",
+                "story_title": _first_non_empty(story_row.get("story_title"), story_row.get("title")) or "Untitled story",
                 "character_name": (
                     story_row.get("character_name")
                     or (character or {}).get("character_name")
@@ -1151,8 +1209,8 @@ async def get_admin_story_detail(request: Request, story_id: str):
                     "name": owner_summary["user_name"],
                 },
                 "child_profile": (
-                    child_profiles_by_id.get(str(story_row.get("child_profile_id")))
-                    if story_row.get("child_profile_id") is not None
+                    child_profiles_by_id.get(str(story_row.get("child_profile_id") or (character or {}).get("child_profile_id")))
+                    if (story_row.get("child_profile_id") or (character or {}).get("child_profile_id")) is not None
                     else None
                 ),
                 "character": {
@@ -1171,7 +1229,7 @@ async def get_admin_story_detail(request: Request, story_id: str):
                         or []
                     ),
                 },
-                "cover_image": story_row.get("story_cover"),
+                "cover_image": _first_non_empty(story_row.get("story_cover"), story_row.get("cover_image")),
                 "pages": _build_story_pages(
                     story_row=story_row,
                     story_format=story_format,

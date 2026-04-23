@@ -5,9 +5,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apis.admin import (
+    _build_story_owner_summary,
     _build_story_count_by_user,
+    _filter_admin_story_summaries,
     _filter_user_summaries,
     _matches_date_range,
+    _pick_latest_story_job,
     _safe_parse_datetime,
 )
 
@@ -90,4 +93,80 @@ def test_story_counts_prefer_explicit_user_id_without_double_counting():
 
     assert counts == {
         "parent-1": 1,
+    }
+
+
+def test_admin_story_filters_map_schema_format_and_status_values():
+    summaries = [
+        {
+            "id": "story-1",
+            "user_email": "parent@example.com",
+            "user_name": "Parent User",
+            "character_name": "Nova",
+            "story_title": "Nova and the Hidden Map",
+            "format": "interactive_search",
+            "status": "generating",
+            "created_at": "2026-04-22T10:00:00+00:00",
+        },
+        {
+            "id": "story-2",
+            "user_email": "other@example.com",
+            "user_name": "Other User",
+            "character_name": "Milo",
+            "story_title": "Milo's Story",
+            "format": "story_adventure",
+            "status": "completed",
+            "created_at": "2026-04-21T10:00:00+00:00",
+        },
+    ]
+
+    filtered = _filter_admin_story_summaries(
+        summaries=summaries,
+        search="parent user",
+        status="processing",
+        format_type="interactive_story",
+        created_from=_safe_parse_datetime("2026-04-22"),
+        created_to=_safe_parse_datetime("2026-04-22", end_of_day=True),
+    )
+
+    assert [summary["id"] for summary in filtered] == ["story-1"]
+
+
+def test_pick_latest_story_job_falls_back_to_story_job_id():
+    story_row = {"id": 123, "job_id": 999}
+    jobs_by_book_id = {}
+    jobs_by_id = {
+        "999": {"id": 999, "status": "failed", "error_message": "generation crashed"},
+    }
+
+    latest_job = _pick_latest_story_job(
+        story_row=story_row,
+        jobs_by_book_id=jobs_by_book_id,
+        jobs_by_id=jobs_by_id,
+    )
+
+    assert latest_job == jobs_by_id["999"]
+
+
+def test_story_owner_summary_falls_back_to_character_owner():
+    summary = _build_story_owner_summary(
+        story_row={"id": 1, "user_id": None, "child_profile_id": None},
+        users_by_id={
+            "parent-1": {
+                "id": "parent-1",
+                "email": "parent@example.com",
+                "first_name": "Parent",
+                "last_name": "User",
+            }
+        },
+        child_parent_by_id={"101": "parent-1"},
+        child_profiles_by_id={"101": {"id": 101, "first_name": "Ava"}},
+        character={"id": 55, "user_id": "parent-1", "child_profile_id": 101},
+    )
+
+    assert summary == {
+        "user_id": "parent-1",
+        "user_email": "parent@example.com",
+        "user_name": "Parent User",
+        "child_name": "Ava",
     }
