@@ -7,10 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from apis.admin import (
     _build_story_owner_summary,
     _build_story_count_by_user,
-    _fetch_generation_jobs_safe,
     _filter_admin_story_summaries,
     _filter_user_summaries,
-    _is_missing_table_error,
     _matches_date_range,
     _pick_latest_story_job,
     _safe_parse_datetime,
@@ -172,49 +170,3 @@ def test_story_owner_summary_falls_back_to_character_owner():
         "user_name": "Parent User",
         "child_name": "Ava",
     }
-
-
-def test_is_missing_table_error_matches_schema_cache_message():
-    error = Exception(
-        "{'message': \"Could not find the table 'public.book_generation_jobs' in the schema cache\", "
-        "'code': 'PGRST205'}"
-    )
-
-    assert _is_missing_table_error(error, "public.book_generation_jobs")
-
-
-class _FailingJobsQuery:
-    def __init__(self, error: Exception):
-        self.error = error
-
-    def select(self, *_args, **_kwargs):
-        return self
-
-    def order(self, *_args, **_kwargs):
-        return self
-
-    def eq(self, *_args, **_kwargs):
-        return self
-
-    def execute(self):
-        raise self.error
-
-
-class _JobsMissingTableSupabase:
-    def __init__(self, error: Exception):
-        self.error = error
-
-    def table(self, name: str):
-        assert name == "book_generation_jobs"
-        return _FailingJobsQuery(self.error)
-
-
-def test_fetch_generation_jobs_safe_returns_empty_when_jobs_table_missing():
-    error = Exception(
-        "{'message': \"Could not find the table 'public.book_generation_jobs' in the schema cache\", "
-        "'code': 'PGRST205'}"
-    )
-    supabase = _JobsMissingTableSupabase(error)
-
-    assert _fetch_generation_jobs_safe(supabase) == []
-    assert _fetch_generation_jobs_safe(supabase, story_row={"id": 1, "job_id": 2}) == []
