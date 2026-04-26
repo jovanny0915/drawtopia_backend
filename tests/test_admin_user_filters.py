@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from apis.admin import (
     _build_story_owner_summary,
     _build_story_count_by_user,
+    _build_user_generation_history_from_stories,
     _filter_admin_story_summaries,
     _filter_user_summaries,
     _fetch_user_payment_history_safe,
@@ -217,3 +218,42 @@ def test_user_payment_history_uses_purchased_stories_for_user():
 
     assert [row["story_id"] for row in history] == ["story-2", "story-1"]
     assert all(row["purchase_status"] == "completed" for row in history)
+
+
+def test_user_generation_history_uses_stories_for_user():
+    stories = [
+        {
+            "uid": "story-1",
+            "user_id": "user-1",
+            "child_profile_id": None,
+            "story_type": "story_adventure",
+            "status": "completed",
+            "created_at": "2026-04-21T10:00:00+00:00",
+        },
+        {
+            "uid": "story-2",
+            "user_id": None,
+            "child_profile_id": 101,
+            "story_type": "interactive_search",
+            "status": "processing",
+            "created_at": "2026-04-22T10:00:00+00:00",
+        },
+        {
+            "uid": "story-3",
+            "user_id": "user-2",
+            "child_profile_id": None,
+            "story_type": "story_adventure",
+            "status": "completed",
+            "created_at": "2026-04-23T10:00:00+00:00",
+        },
+    ]
+
+    history = _build_user_generation_history_from_stories(
+        stories=stories,
+        user_id="user-1",
+        child_parent_by_id={"101": "user-1"},
+    )
+
+    assert [row["story_id"] for row in history] == ["story-2", "story-1"]
+    assert history[0]["job_type"] == "interactive_search"
+    assert history[0]["status"] == "generating"

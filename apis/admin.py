@@ -1013,6 +1013,36 @@ def _fetch_user_payment_history_safe(
     return payment_history
 
 
+def _build_user_generation_history_from_stories(
+    stories: List[Dict[str, Any]],
+    user_id: str,
+    child_parent_by_id: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Build admin generation history from stories when job queue rows are unavailable."""
+    generation_history: List[Dict[str, Any]] = []
+
+    for row in stories:
+        if _resolve_story_owner_user_id(row, child_parent_by_id) != user_id:
+            continue
+
+        story_id = row.get("uid") or row.get("id")
+        generation_history.append({
+            **row,
+            "id": story_id,
+            "book_id": story_id,
+            "story_id": story_id,
+            "job_type": row.get("story_type") or row.get("story_format"),
+            "status": _effective_story_status(row),
+            "error_message": row.get("error_message"),
+        })
+
+    generation_history.sort(
+        key=lambda row: _safe_parse_datetime(row.get("created_at")) or datetime.min,
+        reverse=True,
+    )
+    return generation_history
+
+
 # ==================== API Endpoints ====================
 
 @router.get("/admin/analysis/story-counts-by-day")
@@ -1566,13 +1596,10 @@ async def get_user_detail(request: Request, user_id: str):
             user_id=user_id,
             child_parent_by_id=context["child_parent_by_id"],
         )
-        generation_history_response = (
-            supabase
-            .table("book_generation_jobs")
-            .select("*")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .execute()
+        generation_history = _build_user_generation_history_from_stories(
+            stories=context["stories"],
+            user_id=user_id,
+            child_parent_by_id=context["child_parent_by_id"],
         )
         subscriptions_response = (
             supabase
@@ -1604,7 +1631,7 @@ async def get_user_detail(request: Request, user_id: str):
                 "characters": characters_response.data or [],
                 "story_library": user_stories,
                 "payment_history": payment_history,
-                "generation_history": generation_history_response.data or [],
+                "generation_history": generation_history,
             },
         }
     except HTTPException:
