@@ -9,6 +9,7 @@ from apis.admin import (
     _build_story_count_by_user,
     _filter_admin_story_summaries,
     _filter_user_summaries,
+    _fetch_user_payment_history_safe,
     _matches_date_range,
     _pick_latest_story_job,
     _safe_parse_datetime,
@@ -170,3 +171,49 @@ def test_story_owner_summary_falls_back_to_character_owner():
         "user_name": "Parent User",
         "child_name": "Ava",
     }
+
+
+def test_user_payment_history_uses_purchased_stories_for_user():
+    stories = [
+        {
+            "uid": "story-1",
+            "user_id": "user-1",
+            "child_profile_id": None,
+            "story_title": "Purchased Directly",
+            "created_at": "2026-04-21T10:00:00+00:00",
+            "purchased": True,
+        },
+        {
+            "uid": "story-2",
+            "user_id": None,
+            "child_profile_id": 101,
+            "story_title": "Purchased Through Child",
+            "created_at": "2026-04-22T10:00:00+00:00",
+            "purchased": True,
+        },
+        {
+            "uid": "story-3",
+            "user_id": "user-1",
+            "child_profile_id": None,
+            "story_title": "Not Purchased",
+            "created_at": "2026-04-23T10:00:00+00:00",
+            "purchased": False,
+        },
+        {
+            "uid": "story-4",
+            "user_id": "user-2",
+            "child_profile_id": None,
+            "story_title": "Other User",
+            "created_at": "2026-04-24T10:00:00+00:00",
+            "purchased": True,
+        },
+    ]
+
+    history = _fetch_user_payment_history_safe(
+        stories=stories,
+        user_id="user-1",
+        child_parent_by_id={"101": "user-1"},
+    )
+
+    assert [row["story_id"] for row in history] == ["story-2", "story-1"]
+    assert all(row["purchase_status"] == "completed" for row in history)

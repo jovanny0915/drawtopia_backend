@@ -981,6 +981,38 @@ def _fetch_generation_jobs_safe(supabase, story_row: Optional[Dict[str, Any]] = 
         raise
 
 
+def _fetch_user_payment_history_safe(
+    stories: List[Dict[str, Any]],
+    user_id: str,
+    child_parent_by_id: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Build admin payment history from stories.purchased."""
+    payment_history: List[Dict[str, Any]] = []
+
+    for row in stories:
+        if _resolve_story_owner_user_id(row, child_parent_by_id) != user_id:
+            continue
+        if not row.get("purchased"):
+            continue
+
+        story_id = row.get("uid") or row.get("id")
+        payment_history.append({
+            **row,
+            "id": story_id,
+            "story_id": story_id,
+            "purchase_date": row.get("created_at"),
+            "purchase_status": "completed",
+            "amount": 0.0,
+            "total_amount": 0.0,
+        })
+
+    payment_history.sort(
+        key=lambda row: _safe_parse_datetime(row.get("purchase_date")) or datetime.min,
+        reverse=True,
+    )
+    return payment_history
+
+
 # ==================== API Endpoints ====================
 
 @router.get("/admin/analysis/story-counts-by-day")
@@ -1529,13 +1561,10 @@ async def get_user_detail(request: Request, user_id: str):
             .order("created_at", desc=True)
             .execute()
         )
-        payment_history_response = (
-            supabase
-            .table("book_purchases")
-            .select("*")
-            .eq("user_id", user_id)
-            .order("purchase_date", desc=True)
-            .execute()
+        payment_history = _fetch_user_payment_history_safe(
+            stories=context["stories"],
+            user_id=user_id,
+            child_parent_by_id=context["child_parent_by_id"],
         )
         generation_history_response = (
             supabase
@@ -1574,7 +1603,7 @@ async def get_user_detail(request: Request, user_id: str):
                 },
                 "characters": characters_response.data or [],
                 "story_library": user_stories,
-                "payment_history": payment_history_response.data or [],
+                "payment_history": payment_history,
                 "generation_history": generation_history_response.data or [],
             },
         }
