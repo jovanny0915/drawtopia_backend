@@ -1265,7 +1265,14 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
         client = OpenAI(api_key=main.OPENAI_API_KEY)
 
         if is_interactive_format:
-            prompt = f"Generate a fun, mysterious children’s story title in the style of “Where is Markie in the World?” using the character {body.character_name} and hinting at a global adventure without revealing the exact location."
+            prompt = (
+                f"Create three short, playful children's book titles for a character named {body.character_name} "
+                f"who is hidden among the bustling scenes of {world_display}. "
+                f"Their special ability is {body.special_ability}. Ages {body.age_group}. "
+                f"Each title should evoke a search-and-discover adventure. "
+                f"Return only the titles as a numbered list, no prefix or suffix. "
+                f'Format like: "The Night Nova Stayed"'
+            )
 
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -1273,20 +1280,29 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.8,
-                max_tokens=60,
-                n=3
+                max_tokens=120,
+                n=1
             )
 
             titles = []
-            for choice in response.choices:
-                content = (choice.message.content or "").strip()
-                if not content:
-                    continue
+            content = (response.choices[0].message.content or "").strip() if response.choices else ""
+            if content:
+                import re
+                numbered_titles = re.findall(
+                    r"(?:^|\n)\s*\d+[\).\:-]\s*(.+?)(?=(?:\n\s*\d+[\).\:-])|\Z)",
+                    content,
+                    flags=re.DOTALL,
+                )
 
-                first_line = content.splitlines()[0].strip()
-                cleaned_title = first_line.strip().strip('"').strip("'")
-                if cleaned_title and cleaned_title not in titles:
-                    titles.append(cleaned_title)
+                raw_titles = numbered_titles or content.splitlines()
+                for raw_title in raw_titles:
+                    cleaned_title = re.sub(r"\s+", " ", raw_title).strip()
+                    cleaned_title = re.sub(r"^\d+[\).\:-]\s*", "", cleaned_title)
+                    cleaned_title = cleaned_title.strip().strip("**").strip('"').strip("'")
+                    if cleaned_title and cleaned_title not in titles:
+                        titles.append(cleaned_title)
+                    if len(titles) == 3:
+                        break
         else:
             learning_theme = (body.learning_theme or "").strip() or "wonder and heart"
             prompt = (
