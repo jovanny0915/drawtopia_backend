@@ -36,8 +36,8 @@ class StoryRequest(BaseModel):
                 "adventure_type": "treasure hunt",
                 "occasion_theme": None,
                 "character_image_url": "https://your-project.supabase.co/storage/v1/object/public/images/character_reference.jpg",
-                "story_text_prompt": "Create a personalized 5-page children's storybook...",
-                "scene_prompts": ["Scene prompt for page 1...", "Scene prompt for page 2...", ],
+                "story_text_prompt": "<frontend-supplied story prompt>",
+                "scene_prompts": ["<frontend-supplied scene prompt 1>", "<frontend-supplied scene prompt 2>", ],
                 "reading_level": "developing_reader",
                 "story_title": "The Great Adventure of Luna"
             }
@@ -87,6 +87,7 @@ class StoryTitlesRequest(BaseModel):
     story_format: Optional[str] = "story"  # story, interactive
     age_group: Optional[str] = "7-10"
     learning_theme: Optional[str] = None  # e.g. display name from story theme (session)
+    title_prompt: Optional[str] = None  # Full title-generation prompt from frontend
 
 
 class SaveStoryDraftRequest(BaseModel):

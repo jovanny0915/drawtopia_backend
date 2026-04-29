@@ -338,7 +338,7 @@ class ImageRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "image_url": "https://example.com/image.jpg",
-                "prompt": "Make this image more colorful and vibrant"
+                "prompt": "<frontend-supplied image prompt>"
             }
         }
 
@@ -409,8 +409,8 @@ class StoryRequest(BaseModel):
                 "adventure_type": "treasure hunt",
                 "occasion_theme": None,
                 "character_image_url": "https://your-project.supabase.co/storage/v1/object/public/images/character_reference.jpg",
-                "story_text_prompt": "Create a personalized 5-page children's storybook...",
-                "scene_prompts": ["Scene prompt for page 1...", "Scene prompt for page 2...", ...],
+                "story_text_prompt": "<frontend-supplied story prompt>",
+                "scene_prompts": ["<frontend-supplied scene prompt 1>", "<frontend-supplied scene prompt 2>", ...],
                 "reading_level": "developing_reader",
                 "story_title": "The Great Adventure of Luna"
             }
@@ -1384,8 +1384,8 @@ def get_environment_details(story_world: str) -> str:
 
 def generate_story_scene_image(story_page_text: str, page_number: int, character_name: str, character_type: str, story_world: str, reference_image_url: Optional[str] = None, scene_prompt: Optional[str] = None) -> str:
     """Generate a scene image for a story page using edit_image function and return the image URL.
-    
-    If scene_prompt is provided, use it; otherwise generate prompt from parameters.
+
+    The caller must provide a fully composed scene_prompt from the frontend.
     """
     if not gemini_client:
         logger.warning("Gemini client not available, returning empty scene URL")
@@ -1413,103 +1413,10 @@ def generate_story_scene_image(story_page_text: str, page_number: int, character
             base_image_data = create_blank_base_image()
             logger.info(f"✅ Blank base image created ({len(base_image_data)} bytes)")
         
-        # Use provided prompt if available, otherwise generate one (for backward compatibility)
-        if scene_prompt:
-            prompt = scene_prompt
-            logger.info(f"Using scene prompt from frontend for page {page_number} (no text embedding)")
-        else:
-            # Fallback: generate prompt from parameters (for backward compatibility)
-            character_reference_note = ""
-            character_consistency_enforcement = ""
-            negative_prompts = ""
-            
-            if reference_image_url and base_image_data:
-                character_reference_note = f"""
-CHARACTER REFERENCE:
-- A reference image of {character_name} is provided below
-- Use this reference image to maintain consistent character appearance across all scenes
-- The character in the scene must match the appearance, style, and features shown in the reference image
-- Keep the character's visual identity consistent with the reference image
-"""
-                character_consistency_enforcement = f"""
-=== MANDATORY CHARACTER STYLE CONSISTENCY REQUIREMENTS ===
-CRITICAL: The character from the provided reference image MUST be embedded with EXACT visual fidelity.
-
-REQUIRED CHARACTER FEATURES (DO NOT CHANGE):
-* Face: Exact same facial features, eye shape, nose, mouth, and expression style as reference
-* Limbs: Exact same proportions, length, and structure as reference
-* Body proportions: Exact same height-to-width ratio and body shape as reference
-* Hair: Exact same hair style, color, texture, and length as reference
-* Skin tone: Exact same skin color and tone as reference
-* Clothing: Exact same clothing design, colors, patterns, and details as reference
-* Overall design: Exact same character design language, style, and visual identity as reference
-* Anatomy: Exact same anatomical structure - no changes to bone structure, muscle definition, or body type
-* Style: The character's artistic style must remain consistent with the reference image
-
-STRICT PROHIBITIONS:
-* DO NOT alter the character's facial features
-* DO NOT change the character's body proportions or anatomy
-* DO NOT modify the character's hair style, color, or texture
-* DO NOT change the character's skin tone or color
-* DO NOT alter the character's clothing design, colors, or patterns
-* DO NOT modify the character's overall design or visual identity
-* DO NOT apply different artistic styles to the character than what appears in the reference
-* DO NOT distort, stretch, or resize the character in ways that change their appearance
-* DO NOT add features not present in the reference image
-* DO NOT remove features present in the reference image
-
-ENFORCEMENT:
-The character must be reproduced with pixel-perfect fidelity to the reference image. Any deviation from the reference character's appearance is strictly prohibited. Do not change or reinterpret the character's art style; the character's appearance and style must remain identical to the reference image in all aspects.
-"""
-                negative_prompts = """
-=== NEGATIVE PROMPTS (STRICTLY AVOID) ===
-DO NOT:
-* Alter the character's facial features, proportions, or anatomy
-* Change the character's hair style, color, or texture
-* Modify the character's skin tone or color
-* Alter the character's clothing design, colors, or patterns
-* Change the character's body proportions or structure
-* Apply different artistic styles to the character than the reference
-* Distort, stretch, or resize the character in ways that change appearance
-* Add features not present in the reference image
-* Remove features present in the reference image
-* Create variations of the character - use the exact reference character only
-"""
-            
-            environment_details = get_environment_details(story_world)
-            
-            prompt = f"""Create a beautiful, colorful children's storybook illustration for this story page.
-
-STORY PAGE TEXT (Page {page_number}) - FOR SCENE CONTEXT ONLY:
-{story_page_text}
-
-CRITICAL TEXT RULE:
-- Do not render, draw, or embed any readable text, letters, words, captions, or typography in the image
-- Use the story page text only to understand scene context, mood, and action
-
-CHARACTER INFORMATION:
-- Character Name: {character_name}
-- Character Type: {character_type}
-- Story World: {story_world}
-{environment_details}
-{character_reference_note}
-{character_consistency_enforcement}
-ILLUSTRATION REQUIREMENTS:
-1. Create a vibrant, age-appropriate children's book illustration
-2. Include the main character ({character_name}) as a {character_type} - {character_name} is the clear hero of this story
-3. CHARACTER PROMINENCE: The character ({character_name}) must occupy 60-70% of the composition. The character should be the dominant visual element, clearly visible and prominent in the scene
-4. Match the mood, setting, and events from the story text
-5. Use bright, cheerful colors suitable for children
-6. Make it visually appealing and engaging
-7. Ensure the scene is positive and appropriate for children
-8. Include relevant details about the setting and characters
-9. Style should be like a professional children's book illustration
-10. IMPORTANT: The image must be in 768x512 dimensions
-{"11. CRITICAL: The character must match the appearance shown in the reference image provided" if reference_image_url and base_image_data else ""}
-12. Do not include any readable text or typography in the generated image
-{negative_prompts}
-
-Generate a high-quality illustration that perfectly captures this story moment in 768x512 dimensions, with no rendered text in the image."""
+        prompt = (scene_prompt or "").strip()
+        if not prompt:
+            raise ValueError("scene_prompt is required for story scene image generation")
+        logger.info(f"Using scene prompt from frontend for page {page_number}")
 
         # Use edit_image function to generate the scene
         logger.info(f"Calling edit_image function with prompt for page {page_number}")

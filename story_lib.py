@@ -410,46 +410,13 @@ def generate_story(
     if age_group not in AGE_CONFIGS:
         raise ValueError(f"Invalid age group: {age_group}. Must be one of: 3-6, 7-10, 11-12")
     
-    # Use API if requested
-    if use_api and api_key:
-        try:
-            return _generate_with_api(
-                character_name, character_type, special_ability, age_group,
-                story_world, adventure_type, occasion_theme, api_key, story_text_prompt
-            )
-        except Exception as e:
-            print(f"API error: {e}")
-            print("Falling back to template-based generation...")
+    if not use_api or not api_key:
+        raise ValueError("Story generation must be performed through the third-party API")
     
-    # Generate pages
-    pages = []
-    pages.append(generate_page_1(character_name, character_type, special_ability, age_group))
-    pages.append(generate_page_2(character_name, story_world, age_group))
-    pages.append(generate_page_3(character_name, adventure_type, age_group))
-    pages.append(generate_page_4(character_name, special_ability, age_group))
-    pages.append(generate_page_5(character_name, special_ability, adventure_type, age_group))
-    
-    # Verify word count
-    full_story = "".join(pages)
-    total_words = count_words(full_story)
-    age_config = AGE_CONFIGS[age_group]
-    min_words, max_words = age_config["total_words"]
-    
-    # Adjust if needed
-    if total_words < min_words:
-        pages = _expand_story(pages, age_group, min_words - total_words)
-    elif total_words > max_words:
-        pages = _trim_story(pages, age_group, total_words - max_words)
-    
-    full_story = "".join(pages)
-    page_word_counts = [count_words(page) for page in pages]
-    
-    return {
-        "pages": pages,
-        "full_story": full_story,
-        "word_count": count_words(full_story),
-        "page_word_counts": page_word_counts
-    }
+    return _generate_with_api(
+        character_name, character_type, special_ability, age_group,
+        story_world, adventure_type, occasion_theme, api_key, story_text_prompt
+    )
 
 
 def _generate_with_api(
@@ -463,101 +430,21 @@ def _generate_with_api(
     api_key: str,
     story_text_prompt: Optional[str] = None
 ) -> Dict[str, any]:
-    """Generate story using OpenAI API. If story_text_prompt is provided, use it; otherwise generate prompt from parameters."""
+    """Generate story using OpenAI API with the frontend-supplied prompt."""
     try:
         from openai import OpenAI
     except ImportError:
         raise ImportError("OpenAI package not installed. Install it with: pip install openai")
     
+    prompt = (story_text_prompt or "").strip()
+    if not prompt:
+        raise ValueError("story_text_prompt is required for API story generation")
+
     client = OpenAI(api_key=api_key)
-    
-    # Use provided prompt if available, otherwise generate one (for backward compatibility)
-    if story_text_prompt:
-        prompt = story_text_prompt
-    else:
-        # Fallback: generate prompt from parameters (for backward compatibility)
-        age_config = AGE_CONFIGS[age_group]
-        environment_details = get_environment_details(story_world)
-        
-        prompt = f"""Create a personalized 5-page children's storybook.
-
-CHARACTER INFORMATION:
-- Name: {character_name}
-- Type: {character_type}
-- Special Ability: {special_ability}
-- Age Group: {age_group}
-
-STORY CONFIGURATION:
-- World: {story_world}
-- Environment Details: {environment_details}
-- Adventure Type: {adventure_type}
-- Occasion Theme: {occasion_theme if occasion_theme else 'None'}
-
-AGE-APPROPRIATE REQUIREMENTS FOR {age_group}:
-- Sentence Length: {age_config['sentence_length'][0]}-{age_config['sentence_length'][1]} words per sentence
-- Total Word Count: {age_config['total_words'][0]}-{age_config['total_words'][1]} words across all 5 pages
-- Sentence Structure: {age_config['sentence_structure']}
-
-STORY STRUCTURE (MANDATORY):
-
-PAGE 1 ({age_config['page_sentences'][0]} sentences):
-- Introduce {character_name}
-- Establish {character_type} identity
-- Reveal {special_ability}
-- Set positive, welcoming tone
-
-PAGE 2 ({age_config['page_sentences'][1]} sentences):
-- {character_name} discovers portal/entrance to {story_world}
-- Describe first impressions of the world
-- Establish what draws them into the adventure
-
-PAGE 3 ({age_config['page_sentences'][2]} sentences):
-- Adventure begins: {adventure_type}
-- Introduce challenge or quest objective
-- Optional: Introduce companion character
-- Build excitement and stakes
-
-PAGE 4 ({age_config['page_sentences'][3]} sentences):
-- {character_name} faces main challenge
-- Uses {special_ability} to overcome obstacle
-- Demonstrates growth or cleverness
-- Companion helps if present
-
-PAGE 5 ({age_config['page_sentences'][4]} sentences):
-- Resolution of adventure
-- {character_name}'s personal growth
-- Positive message about {adventure_type}
-- Warm, satisfying ending
-
-CRITICAL REQUIREMENTS:
-1. Character name must appear at least once per page
-2. Special ability must be referenced in pages 1, 4, and 5
-3. All sentences must be age-appropriate for {age_group}
-4. Maintain consistent tone throughout
-5. NO scary, violent, or inappropriate content
-6. Positive, empowering message
-7. Educational value appropriate to age
-8. Gender-neutral language unless character gender specified
-
-Format the output as 5 separate pages of story text, separated by blank lines. DO NOT include page titles like "PAGE 1:", "PAGE 2:", etc. Just provide the story text for each page directly:
-
-[Page 1 story text content]
-
-[Page 2 story text content]
-
-[Page 3 story text content]
-
-[Page 4 story text content]
-
-[Page 5 story text content]
-
-IMPORTANT: Only include the story text itself - no titles, no page numbers, no labels. Just the narrative content for each page separated by blank lines.
-"""
     
     response = client.chat.completions.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are a children's story writer who creates age-appropriate, positive, and educational stories."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,

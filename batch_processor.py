@@ -46,28 +46,6 @@ def _vision_validate_sync(
     return (result_dict, confidence)
 
 
-def _build_enhanced_prompt_suffix(job_data: Dict[str, Any]) -> str:
-    """
-    Build enhanced prompt suffix with more specific character descriptors for regeneration.
-    Includes color, distinctive marks, and pose guidance to improve consistency.
-    MANUAL REVIEW: Refinements based on test results—see docs/IMPLEMENTATION_NOTES.md.
-    """
-    name = job_data.get("character_name", "the character")
-    char_type = job_data.get("character_type", "")
-    world = job_data.get("story_world", "")
-    parts = [
-        "\n\n=== ENHANCED REGENERATION: STRICT CHARACTER FIDELITY ===",
-        f"PRIMARY CHARACTER: {name} ({char_type}).",
-        "Preserve EXACTLY: skin tone, hair color and style, eye color, clothing colors and design.",
-        "Include any distinctive marks, accessories, or features from the reference.",
-        "Pose the character clearly and prominently; match body proportions to the reference.",
-    ]
-    if world:
-        parts.append(f"Setting: {world}.")
-    parts.append("Do not alter the character's appearance from the reference image.")
-    return " ".join(parts)
-
-
 # Helper function to call email API endpoints internally
 async def call_email_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -402,7 +380,8 @@ class BatchProcessor:
                 adventure_type=job_data.get("adventure_type"),
                 occasion_theme=job_data.get("occasion_theme"),
                 use_api=True,
-                api_key=self.openai_api_key
+                api_key=self.openai_api_key,
+                story_text_prompt=job_data.get("story_text_prompt"),
             )
             
             if not story_result:
@@ -673,7 +652,12 @@ class BatchProcessor:
         try:
             from image_utils import generate_story_scene_image, download_image_from_url
 
-            scene_description = f"Scene {scene_index + 1} featuring {job_data.get('character_name', 'the character')} in {job_data.get('story_world', 'a magical world')}"
+            scene_prompts = job_data.get("scene_prompts") or []
+            scene_prompt = scene_prompts[scene_index] if len(scene_prompts) > scene_index else None
+            if not scene_prompt:
+                raise ValueError(f"scene_prompts[{scene_index}] is required for scene generation")
+
+            scene_description = f"Scene {scene_index + 1}"
             reference_image_url = enhanced_images[0] if enhanced_images else character_data.get("original_image_url")
 
             scene_url = generate_story_scene_image(
@@ -685,7 +669,8 @@ class BatchProcessor:
                 reference_image_url=reference_image_url,
                 gemini_client=self.gemini_client,
                 supabase_client=self.supabase,
-                storage_bucket=self.storage_bucket
+                storage_bucket=self.storage_bucket,
+                scene_prompt=scene_prompt,
             )
             self.queue_manager.update_stage_status(stage_id, StageStatus.PROCESSING, progress_percentage=100)
 
@@ -699,7 +684,6 @@ class BatchProcessor:
             )
 
             regeneration_count = 0
-            enhanced_suffix = _build_enhanced_prompt_suffix(job_data)
             while confidence < CONFIDENCE_THRESHOLD and regeneration_count < MAX_REGENERATION_ATTEMPTS:
                 regeneration_count += 1
                 logger.info(
@@ -716,7 +700,7 @@ class BatchProcessor:
                     gemini_client=self.gemini_client,
                     supabase_client=self.supabase,
                     storage_bucket=self.storage_bucket,
-                    enhanced_prompt_suffix=enhanced_suffix
+                    scene_prompt=scene_prompt,
                 )
                 validation_result, confidence = await self._run_vision_validation_with_timeout(
                     scene_url, reference_image_url, job_id, scene_index
@@ -755,6 +739,10 @@ class BatchProcessor:
             from image_utils import generate_story_scene_image
 
             reference_image_url = enhanced_images[0] if enhanced_images else character_data.get("original_image_url")
+            scene_prompts = job_data.get("scene_prompts") or []
+            scene_prompt = scene_prompts[scene_index] if len(scene_prompts) > scene_index else None
+            if not scene_prompt:
+                raise ValueError(f"scene_prompts[{scene_index}] is required for story scene generation")
 
             scene_url = generate_story_scene_image(
                 story_page_text=page_text,
@@ -766,6 +754,7 @@ class BatchProcessor:
                 gemini_client=self.gemini_client,
                 supabase_client=self.supabase,
                 storage_bucket=self.storage_bucket,
+                scene_prompt=scene_prompt,
             )
             self.queue_manager.update_stage_status(stage_id, StageStatus.PROCESSING, progress_percentage=100)
 
@@ -779,7 +768,6 @@ class BatchProcessor:
             )
 
             regeneration_count = 0
-            enhanced_suffix = _build_enhanced_prompt_suffix(job_data)
             while confidence < CONFIDENCE_THRESHOLD and regeneration_count < MAX_REGENERATION_ATTEMPTS:
                 regeneration_count += 1
                 logger.info(
@@ -796,7 +784,7 @@ class BatchProcessor:
                     gemini_client=self.gemini_client,
                     supabase_client=self.supabase,
                     storage_bucket=self.storage_bucket,
-                    enhanced_prompt_suffix=enhanced_suffix,
+                    scene_prompt=scene_prompt,
                 )
                 validation_result, confidence = await self._run_vision_validation_with_timeout(
                     scene_url, reference_image_url, job_id, scene_index

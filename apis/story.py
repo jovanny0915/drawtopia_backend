@@ -32,6 +32,23 @@ if TYPE_CHECKING:
 router = APIRouter()
 
 
+def _require_generation_prompt(value: Optional[str], field_name: str) -> str:
+    prompt = (value or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    return prompt
+
+
+def _require_scene_prompts(scene_prompts: Optional[List[str]], count: int) -> List[str]:
+    if not scene_prompts or len(scene_prompts) < count:
+        raise HTTPException(status_code=400, detail=f"scene_prompts must include {count} prompts")
+
+    prompts = [prompt.strip() for prompt in scene_prompts[:count]]
+    if any(not prompt for prompt in prompts):
+        raise HTTPException(status_code=400, detail="scene_prompts cannot contain empty prompts")
+    return prompts
+
+
 @router.post("/api/books/generate")
 @limiter.limit("10/minute")
 async def create_book_generation_job(request: Request, body):
@@ -75,8 +92,16 @@ async def create_book_generation_job(request: Request, body):
             "story_world": body.story_world,
             "adventure_type": body.adventure_type,
             "occasion_theme": body.occasion_theme,
-            "character_image_url": str(body.character_image_url) if body.character_image_url else None
+            "character_image_url": str(body.character_image_url) if body.character_image_url else None,
+            "story_text_prompt": getattr(body, "story_text_prompt", None),
+            "scene_prompts": getattr(body, "scene_prompts", None),
         }
+
+        if body.job_type == "story_adventure":
+            _require_generation_prompt(job_data.get("story_text_prompt"), "story_text_prompt")
+            _require_scene_prompts(job_data.get("scene_prompts"), 5)
+        elif body.job_type == "interactive_search":
+            _require_scene_prompts(job_data.get("scene_prompts"), 2)
         
         # Create job
         job = main.queue_manager.create_job(
@@ -783,7 +808,9 @@ async def generate_story_text_endpoint(request: Request, body: StoryRequest):
                 status_code=500,
                 detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             )
-        
+
+        story_text_prompt = _require_generation_prompt(body.story_text_prompt, "story_text_prompt")
+
         main.logger.info("Generating story with OpenAI GPT-4...")
         story_result = generate_story(
             character_name=body.character_name,
@@ -795,7 +822,7 @@ async def generate_story_text_endpoint(request: Request, body: StoryRequest):
             occasion_theme=body.occasion_theme,
             use_api=True,
             api_key=main.OPENAI_API_KEY,
-            story_text_prompt=body.story_text_prompt
+            story_text_prompt=story_text_prompt
         )
         
         main.logger.info(f"Story text generated successfully. Word count: {story_result['word_count']}")
@@ -839,6 +866,8 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
                 detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             )
 
+        story_text_prompt = _require_generation_prompt(body.story_text_prompt, "story_text_prompt")
+
         # ——— Step 1: Generate story text ———
         main.logger.info("Step 1/3: Generating story text...")
         story_result = generate_story(
@@ -851,13 +880,14 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
             occasion_theme=body.occasion_theme,
             use_api=True,
             api_key=main.OPENAI_API_KEY,
-            story_text_prompt=body.story_text_prompt
+            story_text_prompt=story_text_prompt
         )
         pages_text = story_result.get("pages") or []
         main.logger.info(f"Story text generated. Word count: {story_result.get('word_count', 0)}")
 
         if not pages_text:
             raise HTTPException(status_code=500, detail="No story pages generated")
+        scene_prompts = _require_scene_prompts(body.scene_prompts, len(pages_text[:5]))
 
         # ——— Step 2: Generate audio ———
         main.logger.info("Step 2/3: Generating story audio...")
@@ -913,16 +943,7 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
         flagged_pages = []
         for i, page_text in enumerate(pages_text[:5], 1):
             main.logger.info(f"Generating scene image for page {i}/5...")
-            scene_prompt = None
-            if body.scene_prompts and len(body.scene_prompts) >= i:
-                raw = body.scene_prompts[i - 1]
-                scene_prompt = raw.replace(
-                    f"[Story text for page {i} will be inserted here by the backend after story generation]",
-                    page_text
-                ).replace(
-                    f"[Page {i} text will be inserted here after story generation]",
-                    page_text
-                )
+            scene_prompt = scene_prompts[i - 1]
 
             scene_url = main.generate_story_scene_image(
                 story_page_text=page_text,
@@ -1038,6 +1059,8 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
                 detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             )
 
+        story_text_prompt = _require_generation_prompt(body.story_text_prompt, "story_text_prompt")
+
         await _send_progress(session_id, 2)
         main.logger.info(f"Generating full story (with progress) for character: {body.character_name}")
 
@@ -1053,7 +1076,7 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
             occasion_theme=body.occasion_theme,
             use_api=True,
             api_key=main.OPENAI_API_KEY,
-            story_text_prompt=body.story_text_prompt
+            story_text_prompt=story_text_prompt
         )
         pages_text = story_result.get("pages") or []
         main.logger.info(f"Story text generated. Word count: {story_result.get('word_count', 0)}")
@@ -1061,6 +1084,7 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
 
         if not pages_text:
             raise HTTPException(status_code=500, detail="No story pages generated")
+        scene_prompts = _require_scene_prompts(body.scene_prompts, len(pages_text[:5]))
 
         # ——— Step 2: Generate audio ———
         main.logger.info("Step 2/3: Generating story audio...")
@@ -1118,16 +1142,7 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
         flagged_pages = []
         for i, page_text in enumerate(pages_text[:5], 1):
             main.logger.info(f"Generating scene image for page {i}/5...")
-            scene_prompt = None
-            if body.scene_prompts and len(body.scene_prompts) >= i:
-                raw = body.scene_prompts[i - 1]
-                scene_prompt = raw.replace(
-                    f"[Story text for page {i} will be inserted here by the backend after story generation]",
-                    page_text
-                ).replace(
-                    f"[Page {i} text will be inserted here after story generation]",
-                    page_text
-                )
+            scene_prompt = scene_prompts[i - 1]
 
             scene_url = main.generate_story_scene_image(
                 story_page_text=page_text,
@@ -1224,7 +1239,7 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
 @router.post("/story/generate-titles")
 @limiter.limit("5/minute")
 async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequest):
-    """Generate 3 story title suggestions using OpenAI based on character and story information"""
+    """Generate story title suggestions using OpenAI with the frontend-supplied prompt."""
     import main  # Import here to avoid circular import
     try:
         if not main.OPENAI_API_KEY:
@@ -1234,113 +1249,43 @@ async def generate_story_titles_endpoint(request: Request, body: StoryTitlesRequ
             )
 
         main.logger.info(f"Generating story titles for character: {body.character_name}")
-
-        # Map story world to display format
-        world_display = {
-            "forest": "Enchanted Forest",
-            "outerspace": "Outer Space",
-            "underwater": "Underwater Kingdom"
-        }.get(body.story_world.lower(), body.story_world)
-
-        # Map adventure type to display format
-        adventure_display = {
-            "treasure": "Treasure Hunt",
-            "treasure_hunt": "Treasure Hunt",
-            "helping": "Helping a Friend",
-            "helpfriend": "Helping a Friend",
-            "helping_friend": "Helping a Friend"
-        }.get(body.adventure_type.lower(), body.adventure_type)
-
-        normalized_story_format = (body.story_format or "story").strip().lower().replace("-", "_")
-        is_interactive_format = normalized_story_format in {
-            "interactive",
-            "interactive_story",
-            "interactive_search",
-            "search",
-            "search_and_find",
-            "intersearch",
-        }
+        prompt = _require_generation_prompt(body.title_prompt, "title_prompt")
 
         from openai import OpenAI
         client = OpenAI(api_key=main.OPENAI_API_KEY)
 
-        if is_interactive_format:
-            prompt = (
-                f"Create three short, playful children's book titles for a character named {body.character_name} "
-                f"who is hidden among the bustling scenes of {world_display}. "
-                f"Their special ability is {body.special_ability}. Ages {body.age_group}. "
-                f"Each title should evoke a search-and-discover adventure. "
-                f"Return only the titles as a numbered list, no prefix or suffix. "
-                f'Format like: "The Night Nova Stayed"'
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
+            max_tokens=120,
+            n=1
+        )
+
+        titles = []
+        content = (response.choices[0].message.content or "").strip() if response.choices else ""
+        if content:
+            import re
+            numbered_titles = re.findall(
+                r"(?:^|\n)\s*\d+[\).\:-]\s*(.+?)(?=(?:\n\s*\d+[\).\:-])|\Z)",
+                content,
+                flags=re.DOTALL,
             )
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.8,
-                max_tokens=120,
-                n=1
-            )
-
-            titles = []
-            content = (response.choices[0].message.content or "").strip() if response.choices else ""
-            if content:
-                import re
-                numbered_titles = re.findall(
-                    r"(?:^|\n)\s*\d+[\).\:-]\s*(.+?)(?=(?:\n\s*\d+[\).\:-])|\Z)",
-                    content,
-                    flags=re.DOTALL,
-                )
-
-                raw_titles = numbered_titles or content.splitlines()
-                for raw_title in raw_titles:
-                    cleaned_title = re.sub(r"\s+", " ", raw_title).strip()
-                    cleaned_title = re.sub(r"^\d+[\).\:-]\s*", "", cleaned_title)
-                    cleaned_title = cleaned_title.strip().strip("**").strip('"').strip("'")
-                    if cleaned_title and cleaned_title not in titles:
-                        titles.append(cleaned_title)
-                    if len(titles) == 3:
-                        break
-        else:
-            learning_theme = (body.learning_theme or "").strip() or "wonder and heart"
-            prompt = (
-                f"Create a short, evocative children's book title about a character named {body.character_name} "
-                f"who discovers {learning_theme} during an adventure in a {world_display}. "
-                f"Their special ability is {body.special_ability}. Ages {body.age_group}. "
-                f"Return only the title, no prefix or suffix. Do not include the learning theme as a literal word in the title. "
-                f'Format like: "The Night Nova Stayed"'
-            )
-
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.8,
-                max_tokens=60,
-                n=3
-            )
-
-            titles = []
-            for choice in response.choices:
-                content = (choice.message.content or "").strip()
-                if not content:
-                    continue
-
-                first_line = content.splitlines()[0].strip()
-                cleaned_title = first_line.strip().strip("**").strip('"').strip("'")
+            raw_titles = numbered_titles or content.splitlines()
+            for raw_title in raw_titles:
+                cleaned_title = re.sub(r"\s+", " ", raw_title).strip()
+                cleaned_title = re.sub(r"^\d+[\).\:-]\s*", "", cleaned_title)
+                cleaned_title = cleaned_title.strip().strip("**").strip('"').strip("'")
                 if cleaned_title and cleaned_title not in titles:
                     titles.append(cleaned_title)
+                if len(titles) == 3:
+                    break
 
-        fallbacks = [
-            f"The Great Adventure of {body.character_name}",
-            f"The Amazing Journey of {body.character_name}",
-            f"{body.character_name} and the {world_display} Quest"
-        ]
-        while len(titles) < 3:
-            titles.append(fallbacks[len(titles)])
+        if not titles:
+            raise HTTPException(status_code=500, detail="No titles returned from OpenAI")
 
         main.logger.info(f"Generated story titles: {titles}")
 
@@ -1374,6 +1319,7 @@ async def generate_story_scenes_endpoint(request: Request, body: StoryScenesRequ
             )
         
         main.logger.info(f"Generating story scenes for character: {body.character_name}")
+        scene_prompts = _require_scene_prompts(body.scene_prompts, len(body.pages[:5]))
         
         # Generate scene images for each page
         main.logger.info("Generating scene images for each story page...")
@@ -1392,12 +1338,7 @@ async def generate_story_scenes_endpoint(request: Request, body: StoryScenesRequ
         
         for i, page_text in enumerate(body.pages[:5], 1):  # Max 5 pages
             main.logger.info(f"Generating scene image for page {i}/5...")
-            scene_prompt = None
-            if body.scene_prompts and len(body.scene_prompts) >= i:
-                scene_prompt = body.scene_prompts[i - 1].replace(
-                    f"[Page {i} text will be inserted here after story generation]",
-                    page_text
-                )
+            scene_prompt = scene_prompts[i - 1]
             
             scene_url = main.generate_story_scene_image(
                 story_page_text=page_text,
