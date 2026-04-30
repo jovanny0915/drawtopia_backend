@@ -1723,9 +1723,18 @@ async def generate_book_pdf(request: Request, book_id: str):
             elif isinstance(parsed_content, str) and parsed_content.strip():
                 content_pages = [{"text": parsed_content.strip()}]
 
+            style_keys = {
+                "x", "y", "fontSize", "font_size", "color", "color_hex",
+                "fontFamily", "font_family", "fontWeight", "font_weight",
+                "fontStyle", "font_style", "strokeColor", "stroke_color",
+                "strokeWidth", "stroke_width", "shadow", "align", "alignment",
+            }
             for page in content_pages[:5]:
                 if isinstance(page, dict):
                     text_value = (page.get("text") or "").strip()
+                    if text_value and any(key in page for key in style_keys):
+                        story_page_texts.append(page)
+                        continue
                 elif isinstance(page, str):
                     text_value = page.strip()
                 else:
@@ -1733,6 +1742,82 @@ async def generate_book_pdf(request: Request, book_id: str):
                 story_page_texts.append(text_value)
         except Exception as e:
             main.logger.warning(f"Could not parse story_content for PDF story text overlay: {e}")
+
+        def _normalize_prompt_style(value: Any) -> str:
+            return str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+
+        def _normalize_prompt_world(value: Any) -> str:
+            world = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+            if "space" in world:
+                return "outerspace"
+            if "underwater" in world:
+                return "underwater"
+            if "forest" in world:
+                return "forest"
+            return world
+
+        def _replace_pdf_text_placeholders(value: Any) -> Any:
+            if isinstance(value, list):
+                return [_replace_pdf_text_placeholders(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            item = dict(value)
+            text_value = str(item.get("text") or "")
+            if text_value:
+                text_value = re.sub(r"\[Character\s+Name\]", character_name, text_value, flags=re.IGNORECASE)
+                text_value = re.sub(r"\[CHARACTER\s+NAME\]", character_name, text_value, flags=re.IGNORECASE)
+                special_ability = str(story.get("special_ability") or "").strip()
+                if special_ability:
+                    text_value = re.sub(r"\[SPECIAL_ABILITY\]", special_ability, text_value, flags=re.IGNORECASE)
+                item["text"] = text_value
+            return item
+
+        def _load_interactive_page_text_styles() -> List[Any]:
+            try:
+                from pathlib import Path
+                prompt_path = (
+                    Path(__file__).resolve().parents[2]
+                    / "drawtopia_frontend"
+                    / "src"
+                    / "lib"
+                    / "prompt_image.json"
+                )
+                if not prompt_path.exists():
+                    return []
+                with prompt_path.open("r", encoding="utf-8") as prompt_file:
+                    prompt_image_data = json.load(prompt_file)
+
+                style_key = _normalize_prompt_style(story.get("character_style")) or "cartoon"
+                world_key = _normalize_prompt_world(story.get("story_world"))
+                page_text_content = (
+                    prompt_image_data
+                    .get("interactiveStoryStyleWorldPagePrompts", {})
+                    .get(style_key, {})
+                    .get(world_key, {})
+                    .get("pageTextContent", {})
+                )
+                if not isinstance(page_text_content, dict):
+                    return []
+
+                scene_count = len(scene_images) if isinstance(scene_images, list) else len(story_page_texts)
+                styled_pages: List[Any] = []
+                for page_number in range(1, max(scene_count, len(story_page_texts), 0) + 1):
+                    content = page_text_content.get(str(page_number)) or page_text_content.get(page_number)
+                    if content:
+                        styled_pages.append(_replace_pdf_text_placeholders(content))
+                    elif page_number - 1 < len(story_page_texts):
+                        styled_pages.append(story_page_texts[page_number - 1])
+                return styled_pages
+            except Exception as e:
+                main.logger.warning(f"Could not load interactive PDF text styles: {e}")
+                return []
+
+        story_type = str(story.get("story_type") or "").strip().lower()
+        story_format = str(story.get("story_format") or "").strip().lower()
+        if story_type in {"search", "interactive", "search-and-find"} or story_format == "interactive_story":
+            styled_interactive_texts = _load_interactive_page_text_styles()
+            if styled_interactive_texts:
+                story_page_texts = styled_interactive_texts
         
         # Check if we have at least cover or scene images (or other page images)
         has_cover = bool(story_cover)
@@ -1765,6 +1850,7 @@ async def generate_book_pdf(request: Request, book_id: str):
             dedication_body=dedication_body,
             dedication_signature=dedication_signature,
             story_page_texts=story_page_texts,
+            story_world=story.get("story_world"),
         )
         
         if not success:

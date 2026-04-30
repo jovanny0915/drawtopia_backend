@@ -5,6 +5,7 @@ Generates print-ready PDFs for both Interactive Search and Story Adventure forma
 
 import logging
 import time
+import re
 from io import BytesIO
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -598,8 +599,10 @@ def _ensure_special_page_fonts() -> None:
         [
             backend_fonts_dir / "Quicksand-Regular.ttf",
             backend_fonts_dir / "Quicksand-VariableFont_wght.ttf",
+            backend_fonts_dir / "Quicksand-Variable.ttf",
             windows_fonts / "Quicksand-Regular.ttf",
             windows_fonts / "Quicksand-VariableFont_wght.ttf",
+            windows_fonts / "Quicksand-Variable.ttf",
         ],
     ):
         _SPECIAL_PAGE_FONT_STATE["regular"] = "DrawtopiaQuicksandRegular"
@@ -634,6 +637,8 @@ def _ensure_special_page_fonts() -> None:
         ],
     ):
         _SPECIAL_PAGE_FONT_STATE["bold"] = "DrawtopiaQuicksandBold"
+        if _SPECIAL_PAGE_FONT_STATE["semibold"] == "Helvetica-Bold":
+            _SPECIAL_PAGE_FONT_STATE["semibold"] = _SPECIAL_PAGE_FONT_STATE["bold"]
 
     if _register_first_available_font(
         "DrawtopiaDMSerifDisplay",
@@ -723,6 +728,136 @@ def _wrap_lines(c: canvas.Canvas, text: str, max_width: float, font_name: str = 
     if current:
         lines.append(" ".join(current))
     return lines
+
+
+def _coerce_float(value: Any, default: float, min_value: Optional[float] = None, max_value: Optional[float] = None) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = default
+    if min_value is not None:
+        result = max(min_value, result)
+    if max_value is not None:
+        result = min(max_value, result)
+    return result
+
+
+def _coerce_pdf_color(value: Any, default: Any = black) -> Any:
+    """Accept CSS-style hex colors and return a ReportLab color."""
+    if isinstance(value, str):
+        color_text = value.strip()
+        if re.fullmatch(r"#?[0-9a-fA-F]{6}", color_text):
+            return HexColor(color_text if color_text.startswith("#") else f"#{color_text}")
+    return default
+
+
+def _resolve_text_font(style: Dict[str, Any], default_weight: str = "medium") -> str:
+    """Map CSS-like font settings to registered ReportLab fonts."""
+    _ensure_special_page_fonts()
+    family = str(style.get("fontFamily") or style.get("font_family") or "Quicksand").lower()
+    raw_weight = style.get("fontWeight") or style.get("font_weight") or default_weight
+    weight_text = str(raw_weight).lower()
+    font_style = str(style.get("fontStyle") or style.get("font_style") or "").lower()
+
+    if "italic" in font_style:
+        return _SPECIAL_PAGE_FONT_STATE["italic"]
+    if "serif" in family or "display" in family or "dm" in family:
+        return _SPECIAL_PAGE_FONT_STATE["display"]
+    if weight_text in {"700", "800", "900", "bold", "extrabold"}:
+        return _SPECIAL_PAGE_FONT_STATE["bold"]
+    if weight_text in {"600", "semibold", "semi-bold"}:
+        return _SPECIAL_PAGE_FONT_STATE["semibold"]
+    if weight_text in {"500", "medium"}:
+        return _SPECIAL_PAGE_FONT_STATE["medium"]
+    return _SPECIAL_PAGE_FONT_STATE["regular"]
+
+
+def _draw_styled_text_items(
+    c: canvas.Canvas,
+    width: float,
+    height: float,
+    text_items: Any,
+    fallback_text: str = "",
+) -> bool:
+    """
+    Draw one or more CSS-like text blocks over a full PDF page.
+
+    Supported metadata: text, x/y (0..1, top-left CSS coordinate space),
+    fontSize/font_size, color/color_hex, fontFamily, fontWeight, strokeColor,
+    strokeWidth, shadow, align/alignment, width.
+    """
+    if isinstance(text_items, dict):
+        items = [text_items]
+    elif isinstance(text_items, list):
+        items = [item for item in text_items if isinstance(item, dict)]
+    else:
+        return False
+
+    drawn = False
+    for raw_item in items:
+        item = dict(raw_item)
+        text = str(item.get("text") or fallback_text or "").strip()
+        if not text:
+            continue
+
+        font_size = _coerce_float(item.get("fontSize", item.get("font_size")), 16.0, 6.0, 72.0)
+        font_name = _resolve_text_font(item)
+        fill_color = _coerce_pdf_color(item.get("color") or item.get("color_hex"), black)
+        stroke_color = _coerce_pdf_color(item.get("strokeColor") or item.get("stroke_color"), None)
+        stroke_width = _coerce_float(item.get("strokeWidth", item.get("stroke_width")), 0.0, 0.0, 8.0)
+        shadow = item.get("shadow", False)
+
+        x_norm = _coerce_float(item.get("x"), 0.5, 0.0, 1.0)
+        y_norm = _coerce_float(item.get("y"), 0.1, 0.0, 1.0)
+        x = x_norm * width
+        y_top = y_norm * height
+        y = height - y_top
+
+        max_width = _coerce_float(
+            item.get("width", item.get("maxWidth", item.get("max_width"))),
+            min(width * 0.58, 350.0),
+            24.0,
+            width,
+        )
+        align = str(item.get("align") or item.get("alignment") or "center").lower()
+        line_height = _coerce_float(item.get("lineHeight", item.get("line_height")), font_size * 1.4, font_size, font_size * 3.0)
+        lines = _wrap_lines(c, text, max_width, font_name, int(round(font_size)))
+        if not lines:
+            continue
+
+        c.saveState()
+        c.setFont(font_name, font_size)
+        current_y = y
+        for line in lines:
+            line_w = c.stringWidth(line, font_name, font_size)
+            if align == "left":
+                line_x = x
+            elif align == "right":
+                line_x = x - line_w
+            else:
+                line_x = x - line_w / 2.0
+
+            if shadow:
+                c.setFillColor(Color(0, 0, 0, alpha=0.35))
+                c.drawString(line_x + 1.2, current_y - 1.2, line)
+
+            if stroke_color is not None and stroke_width > 0:
+                c.setFillColor(stroke_color)
+                outline = max(0.4, stroke_width)
+                for dx, dy in (
+                    (-outline, 0.0), (outline, 0.0), (0.0, -outline), (0.0, outline),
+                    (-outline * 0.7, -outline * 0.7), (-outline * 0.7, outline * 0.7),
+                    (outline * 0.7, -outline * 0.7), (outline * 0.7, outline * 0.7),
+                ):
+                    c.drawString(line_x + dx, current_y + dy, line)
+
+            c.setFillColor(fill_color)
+            c.drawString(line_x, current_y, line)
+            current_y -= line_height
+        c.restoreState()
+        drawn = True
+
+    return drawn
 
 
 def _draw_centered_text_block(
@@ -1222,12 +1357,20 @@ def _draw_story_main_text_blur_layer(
     width: float,
     height: float,
     is_first_story_page: bool,
+    story_world: Optional[str] = None,
+    page_number: Optional[int] = None,
 ) -> None:
     """Add full-circle blue blur under story text (bottom-right on page 1, top-right on pages 2-5)."""
     if width <= 0 or height <= 0:
         return
 
-    blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
+    world_key = (story_world or "").strip().lower().replace("-", "").replace("_", "")
+    if "underwater" in world_key:
+        blur_color = (186 / 255, 224 / 255, 236 / 255) if page_number != 3 else (14 / 255, 44 / 255, 84 / 255)
+        blur_alpha = 70 if page_number != 3 else 90
+    else:
+        blur_color = (59 / 255, 119 / 255, 139 / 255)  # #3B778B
+        blur_alpha = 78
     layer_w = 420.0
     layer_h = 420.0
 
@@ -1265,7 +1408,7 @@ def _draw_story_main_text_blur_layer(
             int(round(blur_color[0] * 255)),
             int(round(blur_color[1] * 255)),
             int(round(blur_color[2] * 255)),
-            78,
+            blur_alpha,
         ),
     )
 
@@ -1280,6 +1423,8 @@ def _draw_story_main_page_text(
     height: float,
     text: str,
     is_first_story_page: bool,
+    story_world: Optional[str] = None,
+    page_number: Optional[int] = None,
 ) -> None:
     """Draw story text in right-side area (page 1 bottom-right, pages 2-5 top-right)."""
     clean_text = (text or "").strip()
@@ -1287,9 +1432,18 @@ def _draw_story_main_page_text(
         return
 
     _ensure_special_page_fonts()
-    text_font = _SPECIAL_PAGE_FONT_STATE["bold"]
-    text_color = HexColor("#FDDAC6")
-    font_size = max(10.0, min(16.0, width * 0.026))
+    world_key = (story_world or "").strip().lower().replace("-", "").replace("_", "")
+    is_underwater = "underwater" in world_key
+    is_space = "space" in world_key or "outerspace" in world_key
+
+    text_font = _SPECIAL_PAGE_FONT_STATE["bold"] if is_underwater else _SPECIAL_PAGE_FONT_STATE["medium"]
+    if is_underwater:
+        text_color = TEXT_WHITE if page_number == 3 else HexColor("#0E2C54")
+    elif is_space:
+        text_color = TEXT_WHITE
+    else:
+        text_color = HexColor("#FDDAC6")
+    font_size = max(10.0, min(18.0, width * 0.030))
     line_height = font_size * 1.25
     # Constrain text to a specific right-side box so placement matches preview intent.
     right_margin = width * 0.04
@@ -1321,6 +1475,13 @@ def _draw_story_main_page_text(
     y = y_start
     for line in lines:
         w = c.stringWidth(line, text_font, font_size)
+        if is_underwater:
+            c.saveState()
+            shadow_color = Color(0, 0, 0, alpha=0.50) if page_number == 3 else Color(1, 1, 1, alpha=0.45)
+            c.setFillColor(shadow_color)
+            c.drawString(x_center - w / 2, y - 1.2, line)
+            c.restoreState()
+            c.setFillColor(text_color)
         c.drawString(x_center - w / 2, y, line)
         y -= line_height
 
@@ -1507,7 +1668,8 @@ def create_book_pdf_with_cover(
     copyright_character_name: Optional[str] = None,
     dedication_body: Optional[str] = None,
     dedication_signature: Optional[str] = None,
-    story_page_texts: Optional[List[str]] = None,
+    story_page_texts: Optional[List[Any]] = None,
+    story_world: Optional[str] = None,
 ) -> bool:
     """
     Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
@@ -1596,21 +1758,45 @@ def create_book_pdf_with_cover(
             c.rect(0, 0, width, height, fill=1, stroke=0)
             if _draw_image_cover_page(c, right_half, width, height):
                 page_count += 1
-            page_text = story_text_list[i - 1] if i - 1 < len(story_text_list) else ""
-            if page_text.strip():
-                _draw_story_main_text_blur_layer(
+            page_text_entry = story_text_list[i - 1] if i - 1 < len(story_text_list) else ""
+            page_text = ""
+            if isinstance(page_text_entry, str):
+                page_text = page_text_entry.strip()
+            elif isinstance(page_text_entry, dict):
+                page_text = str(page_text_entry.get("text") or "").strip()
+            elif isinstance(page_text_entry, list):
+                page_text = " ".join(
+                    str(item.get("text") or "").strip()
+                    for item in page_text_entry
+                    if isinstance(item, dict) and str(item.get("text") or "").strip()
+                ).strip()
+
+            if page_text:
+                styled_text_drawn = _draw_styled_text_items(
                     c,
                     width,
                     height,
-                    is_first_story_page=(i == 1),
+                    page_text_entry,
+                    fallback_text=page_text,
                 )
-                _draw_story_main_page_text(
-                    c,
-                    width,
-                    height,
-                    page_text,
-                    is_first_story_page=(i == 1),
-                )
+                if not styled_text_drawn:
+                    _draw_story_main_text_blur_layer(
+                        c,
+                        width,
+                        height,
+                        is_first_story_page=(i == 1),
+                        story_world=story_world,
+                        page_number=i,
+                    )
+                    _draw_story_main_page_text(
+                        c,
+                        width,
+                        height,
+                        page_text,
+                        is_first_story_page=(i == 1),
+                        story_world=story_world,
+                        page_number=i,
+                    )
             c.showPage()
 
         # 5. Last words page (image + text overlay, same style as preview)
