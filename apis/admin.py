@@ -18,6 +18,7 @@ import json
 import random
 import os
 import logging
+import re
 from uuid import uuid4
 from image_optimizer import TemplateImageOptimizer
 from storage_utils import (
@@ -117,6 +118,21 @@ class PromptUpdateRequest(BaseModel):
 
 class PromptResetRequest(BaseModel):
     default_content: Optional[Any] = None
+
+
+class AdminStoryPageTextUpdate(BaseModel):
+    page_number: int
+    text: str
+    audio_url: Optional[str] = None
+
+
+class AdminStoryUpdateRequest(BaseModel):
+    story_title: Optional[str] = None
+    story_pages_text: Optional[List[AdminStoryPageTextUpdate]] = None
+    scene_images: Optional[List[str]] = None
+    story_cover: Optional[str] = None
+    cover_image: Optional[str] = None
+    enhanced_images: Optional[List[str]] = None
 
 
 # ==================== Helper Functions ====================
@@ -706,10 +722,108 @@ def _first_non_empty(*values: Any) -> Optional[str]:
 
 def _listify_urls(value: Any) -> List[str]:
     if isinstance(value, list):
-        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
+        urls: List[str] = []
+        for item in value:
+            urls.extend(_listify_urls(item))
+        return urls
+    if isinstance(value, dict):
+        return _listify_urls(
+            value.get("url")
+            or value.get("image_url")
+            or value.get("imageUrl")
+            or value.get("scene")
+            or value.get("sceneImage")
+        )
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return []
+        try:
+            parsed = json.loads(cleaned)
+            if parsed != cleaned:
+                return _listify_urls(parsed)
+        except Exception:
+            pass
+
+        url_matches = re.findall(r"https?://[^\s\"'<>\]\)]+", cleaned)
+        if url_matches:
+            return [url.rstrip(".,;") for url in url_matches]
+
+        parts = [
+            part.strip().strip("\"'")
+            for part in re.split(r"[\n,]+", cleaned)
+            if part.strip().strip("\"'")
+        ]
+        return parts or [cleaned]
     return []
+
+
+def _safe_page_number(value: Any, fallback: int) -> int:
+    try:
+        page_number = int(value)
+    except Exception:
+        return fallback
+    return page_number if page_number > 0 else fallback
+
+
+def _extract_story_content_scene_images(story_row: Dict[str, Any]) -> Dict[int, List[str]]:
+    story_content = story_row.get("story_content")
+    if story_content is None:
+        return {}
+
+    parsed_content: Any = story_content
+    if isinstance(parsed_content, str):
+        trimmed = parsed_content.strip()
+        if not trimmed:
+            return {}
+        try:
+            parsed_content = json.loads(trimmed)
+        except Exception:
+            return {}
+
+    content_pages: List[Any] = []
+    if isinstance(parsed_content, dict):
+        pages_value = parsed_content.get("pages")
+        scenes_value = parsed_content.get("scenes")
+        if isinstance(pages_value, list):
+            content_pages.extend(pages_value)
+        if isinstance(scenes_value, list):
+            content_pages.extend(scenes_value)
+    elif isinstance(parsed_content, list):
+        content_pages = parsed_content
+
+    image_by_page: Dict[int, List[str]] = {}
+    for index, page in enumerate(content_pages, start=1):
+        if not isinstance(page, dict):
+            continue
+
+        image_urls: List[str] = []
+        for key in ("sceneImage", "scene_image", "scene", "pageImage", "page_image", "image_url", "image"):
+            image_urls = _listify_urls(page.get(key))
+            if image_urls:
+                break
+        if not image_urls:
+            continue
+
+        page_number = _safe_page_number(
+            page.get("pageNumber")
+            or page.get("page_number")
+            or page.get("sceneNumber")
+            or page.get("scene_number"),
+            index,
+        )
+        image_by_page[page_number] = image_urls
+
+    return image_by_page
+
+
+def _extract_story_scene_images_by_page(story_row: Dict[str, Any]) -> Dict[int, List[str]]:
+    image_by_page = _extract_story_content_scene_images(story_row)
+
+    for index, image_url in enumerate(_listify_urls(story_row.get("scene_images")), start=1):
+        image_by_page[index] = [image_url]
+
+    return image_by_page
 
 
 def _build_story_pages(
@@ -732,15 +846,23 @@ def _build_story_pages(
                 "text": None,
             })
 
-    scene_images = _listify_urls(story_row.get("scene_images"))
+    scene_images_by_page = _extract_story_scene_images_by_page(story_row)
     item_label = "Scene" if story_format == "interactive_search" else "Page"
-    for index, image_url in enumerate(scene_images, start=1):
-        matching_text = next((item for item in story_page_texts if item.get("page_number") == index), None)
+    scene_page_numbers: Set[int] = set(scene_images_by_page.keys())
+    scene_page_numbers.update(
+        item.get("page_number")
+        for item in story_page_texts
+        if isinstance(item.get("page_number"), int) and item.get("page_number") > 0
+    )
+    for page_number in sorted(scene_page_numbers):
+        image_urls = scene_images_by_page.get(page_number) or []
+        matching_text = next((item for item in story_page_texts if item.get("page_number") == page_number), None)
         pages.append({
-            "key": f"scene-{index}",
-            "label": f"{item_label} {index}",
-            "image_url": image_url,
-            "page_number": index,
+            "key": f"scene-{page_number}",
+            "label": f"{item_label} {page_number}",
+            "image_url": image_urls[0] if image_urls else None,
+            "image_urls": image_urls,
+            "page_number": page_number,
             "text": matching_text.get("text") if matching_text else None,
         })
 
@@ -1550,9 +1672,8 @@ async def get_admin_story_detail(request: Request, story_id: str):
                         or story_row.get("original_image_url")
                     ),
                     "enhanced_images": (
-                        (character or {}).get("enhanced_images")
-                        or story_row.get("enhanced_images")
-                        or []
+                        _listify_urls((character or {}).get("enhanced_images"))
+                        or _listify_urls(story_row.get("enhanced_images"))
                     ),
                 },
                 "cover_image": _first_non_empty(story_row.get("story_cover"), story_row.get("cover_image")),
@@ -1571,6 +1692,95 @@ async def get_admin_story_detail(request: Request, story_id: str):
     except Exception as e:
         logger.error(f"❌ Error fetching admin story detail {story_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch admin story detail: {str(e)}")
+
+
+@router.patch("/admin/stories/{story_id}")
+@limiter.limit("20/minute")
+async def update_admin_story(request: Request, story_id: str, body: AdminStoryUpdateRequest):
+    """Update editable story fields from the admin story detail screen."""
+    supabase = get_supabase_client()
+
+    try:
+        story_response = supabase.table("stories").select("*").eq("uid", story_id).execute()
+        story_row = story_response.data[0] if story_response.data else None
+
+        if story_row is None:
+            try:
+                numeric_story_id = int(story_id)
+            except ValueError:
+                numeric_story_id = None
+
+            if numeric_story_id is not None:
+                numeric_story_response = supabase.table("stories").select("*").eq("id", numeric_story_id).execute()
+                story_row = numeric_story_response.data[0] if numeric_story_response.data else None
+
+        if story_row is None:
+            raise HTTPException(status_code=404, detail="Story not found")
+
+        update_data: Dict[str, Any] = {}
+        provided_fields = getattr(body, "model_fields_set", set())
+
+        if "story_title" in provided_fields:
+            update_data["story_title"] = body.story_title
+
+        if "scene_images" in provided_fields:
+            update_data["scene_images"] = body.scene_images or []
+
+        if "story_cover" in provided_fields:
+            update_data["story_cover"] = body.story_cover
+
+        if "cover_image" in provided_fields:
+            update_data["cover_image"] = body.cover_image
+
+        if "enhanced_images" in provided_fields:
+            update_data["enhanced_images"] = body.enhanced_images or []
+
+        if "story_pages_text" in provided_fields:
+            sorted_pages = sorted(body.story_pages_text or [], key=lambda page: page.page_number)
+            update_data["story_content"] = json.dumps({
+                "pages": [
+                    {
+                        "pageNumber": page.page_number,
+                        "text": page.text,
+                        "audio_url": page.audio_url,
+                    }
+                    for page in sorted_pages
+                ]
+            })
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No editable story fields were provided")
+
+        updated_response = (
+            supabase
+            .table("stories")
+            .update(update_data)
+            .eq("id", story_row.get("id"))
+            .select("*")
+            .single()
+            .execute()
+        )
+        updated_story = updated_response.data
+
+        if "enhanced_images" in provided_fields and story_row.get("character_id") is not None:
+            try:
+                supabase.table("characters").update({
+                    "enhanced_images": body.enhanced_images or []
+                }).eq("id", story_row.get("character_id")).execute()
+            except Exception as character_update_error:
+                logger.warning(
+                    f"Could not sync enhanced_images to character {story_row.get('character_id')}: {character_update_error}"
+                )
+
+        return {
+            "success": True,
+            "data": updated_story,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error updating admin story {story_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update story: {str(e)}")
 
 
 @router.get("/admin/templates")

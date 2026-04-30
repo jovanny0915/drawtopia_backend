@@ -5,12 +5,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apis.admin import (
+    _build_story_pages,
     _build_story_owner_summary,
     _build_story_count_by_user,
     _build_user_generation_history_from_stories,
     _filter_admin_story_summaries,
     _filter_user_summaries,
     _fetch_user_payment_history_safe,
+    _listify_urls,
     _matches_date_range,
     _pick_latest_story_job,
     _safe_parse_datetime,
@@ -148,6 +150,103 @@ def test_pick_latest_story_job_falls_back_to_story_job_id():
     )
 
     assert latest_job == jobs_by_id["999"]
+
+
+def test_build_story_pages_returns_all_adventure_page_text_entries():
+    pages = _build_story_pages(
+        story_row={"scene_images": ["page-1.png", "page-2.png", "page-3.png"]},
+        story_format="story_adventure",
+        story_page_texts=[
+            {"page_number": 1, "text": "Page one", "audio_url": None},
+            {"page_number": 2, "text": "Page two", "audio_url": None},
+            {"page_number": 3, "text": "Page three", "audio_url": None},
+            {"page_number": 4, "text": "Page four", "audio_url": None},
+            {"page_number": 5, "text": "Page five", "audio_url": None},
+        ],
+    )
+
+    story_pages = [page for page in pages if page["page_number"]]
+
+    assert [page["label"] for page in story_pages] == ["Page 1", "Page 2", "Page 3", "Page 4", "Page 5"]
+    assert [page["image_url"] for page in story_pages] == [
+        "page-1.png",
+        "page-2.png",
+        "page-3.png",
+        None,
+        None,
+    ]
+
+
+def test_build_story_pages_uses_story_content_scene_image_fallbacks():
+    pages = _build_story_pages(
+        story_row={
+            "story_content": {
+                "pages": [
+                    {"pageNumber": 1, "text": "Page one", "sceneImage": "content-page-1.png"},
+                    {"pageNumber": 2, "text": "Page two", "sceneImage": "content-page-2.png"},
+                    {"pageNumber": 3, "text": "Page three", "sceneImage": "content-page-3.png"},
+                    {"pageNumber": 4, "text": "Page four", "sceneImage": "content-page-4.png"},
+                    {"pageNumber": 5, "text": "Page five", "sceneImage": "content-page-5.png"},
+                ],
+            },
+        },
+        story_format="story_adventure",
+        story_page_texts=[
+            {"page_number": 1, "text": "Page one", "audio_url": None},
+            {"page_number": 2, "text": "Page two", "audio_url": None},
+            {"page_number": 3, "text": "Page three", "audio_url": None},
+            {"page_number": 4, "text": "Page four", "audio_url": None},
+            {"page_number": 5, "text": "Page five", "audio_url": None},
+        ],
+    )
+
+    story_pages = [page for page in pages if page["page_number"]]
+
+    assert [page["image_url"] for page in story_pages] == [
+        "content-page-1.png",
+        "content-page-2.png",
+        "content-page-3.png",
+        "content-page-4.png",
+        "content-page-5.png",
+    ]
+
+
+def test_build_story_pages_splits_blobbed_scene_image_urls():
+    pages = _build_story_pages(
+        story_row={
+            "scene_images": (
+                "https://example.supabase.co/storage/v1/object/public/images/page-1.png\n"
+                "https://example.supabase.co/storage/v1/object/public/images/page-2.png, "
+                "https://example.supabase.co/storage/v1/object/public/images/page-3.png"
+            )
+        },
+        story_format="story_adventure",
+        story_page_texts=[
+            {"page_number": 1, "text": "Page one", "audio_url": None},
+            {"page_number": 2, "text": "Page two", "audio_url": None},
+            {"page_number": 3, "text": "Page three", "audio_url": None},
+        ],
+    )
+
+    story_pages = [page for page in pages if page["page_number"]]
+
+    assert [page["image_url"] for page in story_pages] == [
+        "https://example.supabase.co/storage/v1/object/public/images/page-1.png",
+        "https://example.supabase.co/storage/v1/object/public/images/page-2.png",
+        "https://example.supabase.co/storage/v1/object/public/images/page-3.png",
+    ]
+
+
+def test_listify_urls_normalizes_json_and_blobbed_enhanced_images():
+    urls = _listify_urls(
+        '["https://example.supabase.co/a.png", "https://example.supabase.co/b.png"]'
+    )
+    blobbed_urls = _listify_urls(
+        "https://example.supabase.co/c.png https://example.supabase.co/d.png"
+    )
+
+    assert urls == ["https://example.supabase.co/a.png", "https://example.supabase.co/b.png"]
+    assert blobbed_urls == ["https://example.supabase.co/c.png", "https://example.supabase.co/d.png"]
 
 
 def test_story_owner_summary_falls_back_to_character_owner():
