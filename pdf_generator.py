@@ -954,7 +954,44 @@ def _draw_styled_centered_text_line(
     c.saveState()
     c.setFont(font_name, font_size)
     c.setFillColor(fill_color)
-    c.drawString(x, y, text)
+    fill_radius = max(0.75, font_size * 0.025)
+    fill_offsets = [
+        (0.0, 0.0),
+        (-fill_radius, 0.0), (fill_radius, 0.0), (0.0, -fill_radius), (0.0, fill_radius),
+        (-fill_radius * 0.7, -fill_radius * 0.7), (-fill_radius * 0.7, fill_radius * 0.7),
+        (fill_radius * 0.7, -fill_radius * 0.7), (fill_radius * 0.7, fill_radius * 0.7),
+    ]
+    for dx, dy in fill_offsets:
+        c.drawString(x + dx, y + dy, text)
+    c.restoreState()
+
+
+def _draw_extra_bold_centered_text_line(
+    c: canvas.Canvas,
+    text: str,
+    x_center: float,
+    y: float,
+    font_name: str,
+    font_size: float,
+    fill_color: Any,
+    weight_radius: Optional[float] = None,
+) -> None:
+    """Draw a centered line with repeated tiny offsets to simulate heavier font weight."""
+    c.saveState()
+    c.setFont(font_name, font_size)
+    c.setFillColor(fill_color)
+    text_width = c.stringWidth(text, font_name, font_size)
+    x = x_center - text_width / 2
+    radius = weight_radius if weight_radius is not None else max(0.7, font_size * 0.022)
+    offsets = [
+        (0.0, 0.0),
+        (-radius, 0.0), (radius, 0.0), (0.0, -radius), (0.0, radius),
+        (-radius * 0.65, -radius * 0.65), (-radius * 0.65, radius * 0.65),
+        (radius * 0.65, -radius * 0.65), (radius * 0.65, radius * 0.65),
+        (-radius * 1.35, 0.0), (radius * 1.35, 0.0),
+    ]
+    for dx, dy in offsets:
+        c.drawString(x + dx, y + dy, text)
     c.restoreState()
 
 
@@ -1113,14 +1150,16 @@ def _draw_last_admin_page_text(
     tagline = "Their imagination. Their characters. Their stories. Enhanced, not replaced."
     body = "At Drawtopia, we believe every child's drawing holds a story waiting to be told. We use the magic of AI to enhance - never replace - your child's authentic artwork, turning their imagination into adventures they'll treasure forever."
 
-    title_lines = _wrap_lines(c, title, max_w, bold_font, 31)
+    title_font_size = 34
+    title_line_height = height * 0.053
+    title_lines = _wrap_lines(c, title, max_w * 1.03, bold_font, title_font_size)
     tagline_lines = _wrap_lines(c, tagline, max_w, regular_font, 21)
     body_lines = _wrap_lines(c, body, max_w, regular_font, 18)
 
     # Center only the text stack (title + tagline + body) vertically.
     # The logo and CTA button remain independently positioned.
     text_block_height = (
-        len(title_lines) * line_height
+        len(title_lines) * title_line_height
         + line_height * 0.24
         + len(tagline_lines) * line_height
         + line_height * 0.24
@@ -1128,11 +1167,18 @@ def _draw_last_admin_page_text(
     )
     y = (height + text_block_height) / 2
 
-    c.setFont(bold_font, 31)
     for line in title_lines:
-        w = c.stringWidth(line, bold_font, 31)
-        c.drawString(cx - w / 2, y, line)
-        y -= line_height
+        _draw_extra_bold_centered_text_line(
+            c,
+            line,
+            cx,
+            y,
+            bold_font,
+            title_font_size,
+            TEXT_WHITE,
+            weight_radius=1.05,
+        )
+        y -= title_line_height
 
     y -= line_height * 0.24
     c.setFont(regular_font, 21)
@@ -1562,10 +1608,10 @@ def _draw_back_cover_text(
     cx = width / 2
     margin_x = width * 0.06
     max_w = width - 2 * margin_x
-    y = height * 0.79
-    title_font_size = 35
-    title_line_gap = height * 0.062
-    stroke_width = max(2.0, title_font_size * 0.13)
+    y = height * 0.805
+    title_font_size = 43
+    title_line_gap = height * 0.071
+    stroke_width = max(6.5, title_font_size * 0.17)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
     for line in title_lines:
