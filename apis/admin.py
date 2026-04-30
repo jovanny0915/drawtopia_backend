@@ -147,12 +147,14 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PROMPT_FILES = {
     "prompt1": REPO_ROOT / "drawtopia_frontend" / "src" / "lib" / "prompt1.json",
     "prompt_image": REPO_ROOT / "drawtopia_frontend" / "src" / "lib" / "prompt_image.json",
+    "prompt_story": REPO_ROOT / "drawtopia_frontend" / "src" / "lib" / "prompt_story.json",
     "backend_prompts": BACKEND_ROOT / "prompts.json",
 }
 PROMPT_DOCUMENTS_TABLE = "ai_prompt_documents"
 PROMPT_DOCUMENT_DESCRIPTIONS = {
     "prompt1": "Frontend prompt configuration for character enhancement, story text, covers, scenes, and interactive search.",
     "prompt_image": "Frontend template/image prompt configuration for story pages and interactive character replacement.",
+    "prompt_story": "Frontend adventure story text prompt architecture used for OpenAI story generation.",
     "backend_prompts": "Backend Gemini/OpenAI prompt configuration for validation, comparison, and hints.",
 }
 

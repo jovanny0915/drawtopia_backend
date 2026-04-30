@@ -30,6 +30,41 @@ if TYPE_CHECKING:
     import main
 
 router = APIRouter()
+PROMPT_DOCUMENTS_TABLE = "ai_prompt_documents"
+PROMPT_IMAGE_FILE_KEY = "prompt_image"
+
+
+def _load_prompt_image_content() -> Dict[str, Any]:
+    try:
+        import main
+        if main.supabase:
+            response = (
+                main.supabase
+                .table(PROMPT_DOCUMENTS_TABLE)
+                .select("content")
+                .eq("file_key", PROMPT_IMAGE_FILE_KEY)
+                .limit(1)
+                .execute()
+            )
+            rows = response.data or []
+            content = rows[0].get("content") if rows else None
+            if isinstance(content, dict):
+                return content
+    except Exception:
+        pass
+
+    from pathlib import Path
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "drawtopia_frontend"
+        / "src"
+        / "lib"
+        / "prompt_image.json"
+    )
+    if not prompt_path.exists():
+        return {}
+    with prompt_path.open("r", encoding="utf-8") as prompt_file:
+        return json.load(prompt_file)
 
 
 def _require_generation_prompt(value: Optional[str], field_name: str) -> str:
@@ -1774,18 +1809,7 @@ async def generate_book_pdf(request: Request, book_id: str):
 
         def _load_interactive_page_text_styles() -> List[Any]:
             try:
-                from pathlib import Path
-                prompt_path = (
-                    Path(__file__).resolve().parents[2]
-                    / "drawtopia_frontend"
-                    / "src"
-                    / "lib"
-                    / "prompt_image.json"
-                )
-                if not prompt_path.exists():
-                    return []
-                with prompt_path.open("r", encoding="utf-8") as prompt_file:
-                    prompt_image_data = json.load(prompt_file)
+                prompt_image_data = _load_prompt_image_content()
 
                 style_key = _normalize_prompt_style(story.get("character_style")) or "cartoon"
                 world_key = _normalize_prompt_world(story.get("story_world"))
