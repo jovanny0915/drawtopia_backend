@@ -1596,7 +1596,7 @@ def _draw_back_cover_text(
     y = height * 0.812
     title_font_size = 49
     title_line_gap = height * 0.078
-    stroke_width = max(5.4, title_font_size * 0.115)
+    stroke_width = max(7.2, title_font_size * 0.15)
     title_stroke = HexColor("#1C596F")
     title_lines = ["Drawtopia Makes", "Every Child a", "Storyteller"]
     for line in title_lines:
