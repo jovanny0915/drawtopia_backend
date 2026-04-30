@@ -1223,31 +1223,8 @@ def validate_image_quality(image_data: bytes, image_url: Optional[str] = None) -
         # Encode image to base64
         image_base64 = base64.b64encode(image_data).decode('utf-8')
         
-        # Create validation prompt
-        validation_prompt = """Analyze this image and provide a quality assessment in the following JSON format:
-{
-  "quality_score": <float 0.0-1.0>,
-  "is_appropriate": <boolean>,
-  "is_clear": <boolean>,
-  "has_sufficient_detail": <boolean>,
-  "issues": [<array of issue strings>],
-  "recommendations": [<array of recommendation strings>],
-  "image_properties": {
-    "estimated_resolution": "<width>x<height>",
-    "clarity": "<low/medium/high>",
-    "brightness": "<too_dark/normal/too_bright>",
-    "composition": "<poor/fair/good/excellent>"
-  }
-}
-
-Focus on:
-1. Image clarity and sharpness
-2. Appropriate content for children (no violence, adult content, etc.)
-3. Sufficient detail and resolution
-4. Overall visual quality
-5. Any technical issues (blur, distortion, artifacts)
-
-Be strict but fair. Return ONLY valid JSON, no additional text."""
+        from prompt_loader import get_prompt
+        validation_prompt = get_prompt("imageQualityValidation")
         
         # Call Gemini API for validation
         response = gemini_client.models.generate_content(

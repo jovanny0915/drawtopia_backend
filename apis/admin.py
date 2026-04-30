@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any, Set
 from rate_limiter import limiter
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+from pathlib import Path
 import json
 import random
 import os
@@ -107,6 +108,17 @@ class AdminUserUpdate(BaseModel):
     credit: Optional[int] = None
 
 
+class PromptUpdateRequest(BaseModel):
+    file_key: str
+    key_path: List[str]
+    value: Any
+    base_content: Optional[Any] = None
+
+
+class PromptResetRequest(BaseModel):
+    default_content: Optional[Any] = None
+
+
 # ==================== Helper Functions ====================
 
 def get_supabase_client():
@@ -129,6 +141,131 @@ VALID_TEMPLATE_STORY_STYLES = {
 
 # Book product line: adventure (linear) vs interactive; stored on book_templates.story_format
 VALID_BOOK_TEMPLATE_STORY_FORMATS = frozenset({"adventure_story", "interactive_story"})
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+PROMPT_FILES = {
+    "prompt1": REPO_ROOT / "drawtopia_frontend" / "src" / "lib" / "prompt1.json",
+    "prompt_image": REPO_ROOT / "drawtopia_frontend" / "src" / "lib" / "prompt_image.json",
+    "backend_prompts": BACKEND_ROOT / "prompts.json",
+}
+PROMPT_DOCUMENTS_TABLE = "ai_prompt_documents"
+PROMPT_DOCUMENT_DESCRIPTIONS = {
+    "prompt1": "Frontend prompt configuration for character enhancement, story text, covers, scenes, and interactive search.",
+    "prompt_image": "Frontend template/image prompt configuration for story pages and interactive character replacement.",
+    "backend_prompts": "Backend Gemini/OpenAI prompt configuration for validation, comparison, and hints.",
+}
+
+
+def _load_prompt_file(file_key: str) -> Any:
+    path = PROMPT_FILES.get(file_key)
+    if not path:
+        raise HTTPException(status_code=400, detail=f"Unsupported prompt file: {file_key}")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Prompt file not found: {file_key}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Prompt file contains invalid JSON: {file_key}") from exc
+
+
+def _clear_prompt_runtime_cache() -> None:
+    try:
+        from prompt_loader import clear_prompt_cache
+        clear_prompt_cache()
+    except Exception as exc:
+        logger.warning(f"Could not clear prompt runtime cache: {exc}")
+
+
+def _prompt_document_payload(file_key: str, content: Any) -> Dict[str, Any]:
+    return {
+        "file_key": file_key,
+        "content": content,
+        "description": PROMPT_DOCUMENT_DESCRIPTIONS.get(file_key),
+    }
+
+
+def _format_prompt_document(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "file_key": row.get("file_key"),
+        "content": row.get("content"),
+        "description": row.get("description"),
+        "version": row.get("version"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+    }
+
+
+def _get_prompt_document(supabase, file_key: str) -> Optional[Dict[str, Any]]:
+    response = (
+        supabase
+        .table(PROMPT_DOCUMENTS_TABLE)
+        .select("*")
+        .eq("file_key", file_key)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None
+
+
+def _seed_prompt_document(supabase, file_key: str, fallback_content: Optional[Any] = None) -> Dict[str, Any]:
+    default_content = fallback_content if fallback_content is not None else _load_prompt_file(file_key)
+    payload = _prompt_document_payload(file_key, default_content)
+    response = (
+        supabase
+        .table(PROMPT_DOCUMENTS_TABLE)
+        .upsert(payload, on_conflict="file_key")
+        .execute()
+    )
+    rows = response.data or []
+    if rows:
+        return rows[0]
+    seeded = _get_prompt_document(supabase, file_key)
+    if not seeded:
+        raise HTTPException(status_code=500, detail=f"Failed to seed prompt document: {file_key}")
+    return seeded
+
+
+def _ensure_prompt_document(supabase, file_key: str, fallback_content: Optional[Any] = None) -> Dict[str, Any]:
+    if file_key not in PROMPT_FILES:
+        raise HTTPException(status_code=400, detail=f"Unsupported prompt file: {file_key}")
+    existing = _get_prompt_document(supabase, file_key)
+    return existing or _seed_prompt_document(supabase, file_key, fallback_content)
+
+
+def _list_prompt_documents(supabase) -> List[Dict[str, Any]]:
+    documents: List[Dict[str, Any]] = []
+    for file_key in PROMPT_FILES.keys():
+        try:
+            documents.append(_ensure_prompt_document(supabase, file_key))
+        except HTTPException as exc:
+            logger.warning(f"Could not seed prompt document {file_key}: {exc.detail}")
+        except Exception as exc:
+            logger.warning(f"Could not load prompt document {file_key}: {exc}")
+    return documents
+
+
+def _documents_to_content_map(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {document["file_key"]: document.get("content") for document in documents}
+
+
+def _set_nested_prompt_value(data: Any, key_path: List[str], value: Any) -> Any:
+    if not key_path:
+        return value
+
+    current = data
+    for key in key_path[:-1]:
+        if not isinstance(current, dict) or key not in current:
+            raise HTTPException(status_code=400, detail=f"Prompt path not found: {'.'.join(key_path)}")
+        current = current[key]
+
+    if not isinstance(current, dict):
+        raise HTTPException(status_code=400, detail=f"Prompt path is not editable: {'.'.join(key_path)}")
+
+    current[key_path[-1]] = value
+    return data
 
 
 def normalize_book_template_story_format(value: Optional[str]) -> Optional[str]:
@@ -1045,6 +1182,103 @@ def _build_user_generation_history_from_stories(
 
 # ==================== API Endpoints ====================
 
+@router.get("/admin/prompts")
+async def get_admin_prompts(request: Request):
+    """Return editable prompt JSON documents for the admin prompt manager."""
+    try:
+        supabase = get_supabase_client()
+        documents = [_format_prompt_document(row) for row in _list_prompt_documents(supabase)]
+        return {
+            "success": True,
+            "data": _documents_to_content_map(documents),
+            "documents": documents,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error loading admin prompts: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load prompts: {str(e)}")
+
+
+@router.patch("/admin/prompts")
+async def update_admin_prompt(request: Request, body: PromptUpdateRequest):
+    """Update one prompt JSON section from the admin prompt manager."""
+    try:
+        json.dumps(body.value, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Prompt value must be JSON serializable") from exc
+
+    try:
+        supabase = get_supabase_client()
+        document = _ensure_prompt_document(supabase, body.file_key, body.base_content)
+        content = document.get("content")
+        updated_content = _set_nested_prompt_value(content, body.key_path, body.value)
+        next_version = int(document.get("version") or 1) + 1
+        response = (
+            supabase
+            .table(PROMPT_DOCUMENTS_TABLE)
+            .upsert({
+                "file_key": body.file_key,
+                "content": updated_content,
+                "description": PROMPT_DOCUMENT_DESCRIPTIONS.get(body.file_key),
+                "version": next_version,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="file_key")
+            .execute()
+        )
+        updated_rows = response.data or []
+        updated_document = updated_rows[0] if updated_rows else _ensure_prompt_document(supabase, body.file_key, updated_content)
+        _clear_prompt_runtime_cache()
+        return {
+            "success": True,
+            "message": "Prompt updated successfully",
+            "data": updated_content,
+            "document": _format_prompt_document(updated_document),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error updating admin prompt: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update prompt: {str(e)}")
+
+
+@router.post("/admin/prompts/{file_key}/reset")
+async def reset_admin_prompt(request: Request, file_key: str, body: Optional[PromptResetRequest] = None):
+    """Reset one prompt JSON document to the checked-in JSON default."""
+    if file_key not in PROMPT_FILES:
+        raise HTTPException(status_code=400, detail=f"Unsupported prompt file: {file_key}")
+
+    try:
+        supabase = get_supabase_client()
+        default_content = body.default_content if body and body.default_content is not None else _load_prompt_file(file_key)
+        existing = _ensure_prompt_document(supabase, file_key, default_content)
+        next_version = int(existing.get("version") or 1) + 1
+        response = (
+            supabase
+            .table(PROMPT_DOCUMENTS_TABLE)
+            .upsert({
+                **_prompt_document_payload(file_key, default_content),
+                "version": next_version,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="file_key")
+            .execute()
+        )
+        rows = response.data or []
+        document = rows[0] if rows else _ensure_prompt_document(supabase, file_key, default_content)
+        _clear_prompt_runtime_cache()
+        return {
+            "success": True,
+            "message": "Prompt reset successfully",
+            "data": default_content,
+            "document": _format_prompt_document(document),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error resetting admin prompt: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset prompt: {str(e)}")
+
+
 @router.get("/admin/analysis/story-counts-by-day")
 @limiter.limit("60/minute")
 async def get_story_counts_by_day(request: Request, days: int = Query(90, ge=7, le=365)):
@@ -1917,7 +2151,7 @@ async def create_template(request: Request, body: BookTemplateCreate):
     valid_story_worlds = ['forest', 'underwater', 'outerspace']
     if body.story_world and body.story_world not in valid_story_worlds:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Invalid story_world. Must be one of: {', '.join(valid_story_worlds)}"
         )
 

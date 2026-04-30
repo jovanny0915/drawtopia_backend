@@ -69,48 +69,8 @@ def validate_character_consistency(
         scene_base64 = base64.b64encode(scene_image_data).decode('utf-8')
         reference_base64 = base64.b64encode(reference_image_data).decode('utf-8')
         
-        # Create validation prompt for Gemini
-        validation_prompt = """Analyze these two images and determine how consistent the character appearance is between them.
-
-IMAGE 1 (REFERENCE): This is the reference character image (normal.png) showing the character's standard appearance.
-
-IMAGE 2 (SCENE): This is a scene from a storybook that should contain the same character.
-
-Your task is to compare the character in the scene image against the reference image and provide a similarity score.
-
-Focus on these character features:
-1. Facial features (eyes, nose, mouth, face shape)
-2. Body proportions and structure
-3. Hair style, color, and texture
-4. Skin tone and color
-5. Clothing design, colors, and patterns
-6. Overall character design and visual style
-7. Character's artistic style consistency
-
-Return your analysis in the following JSON format (ONLY valid JSON, no additional text):
-{
-  "similarity_score": <float between 0.0 and 1.0>,
-  "is_consistent": <boolean>,
-  "character_match_details": {
-    "facial_features_match": <float 0.0-1.0>,
-    "body_proportions_match": <float 0.0-1.0>,
-    "hair_match": <float 0.0-1.0>,
-    "skin_tone_match": <float 0.0-1.0>,
-    "clothing_match": <float 0.0-1.0>,
-    "overall_style_match": <float 0.0-1.0>
-  },
-  "issues": [<array of specific inconsistency issues found>],
-  "confidence": <float 0.0-1.0>
-}
-
-Scoring guidelines:
-- 0.9-1.0: Character is nearly identical or identical to reference
-- 0.7-0.89: Character is very similar with minor differences
-- 0.5-0.69: Character is somewhat similar but has noticeable differences
-- 0.3-0.49: Character has significant differences from reference
-- 0.0-0.29: Character is very different or unrecognizable compared to reference
-
-Threshold: A score of 0.5 or higher indicates consistency. Below 0.5 should be flagged as inconsistent."""
+        from prompt_loader import get_prompt
+        validation_prompt = get_prompt("characterConsistencyValidation")
         
         # Call Gemini API for validation
         validation_start = time.time()

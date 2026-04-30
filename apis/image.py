@@ -730,20 +730,8 @@ async def compare_similarity_endpoint(request: Request, body: CompareSimilarityR
         image_base64_1 = base64.b64encode(image_data1).decode('utf-8')
         image_base64_2 = base64.b64encode(image_data2).decode('utf-8')
         
-        # Prepare prompt for similarity comparison
-        comparison_prompt = """Compare these two images and provide a similarity score from 0 to 10, where:
-- 0 means completely different (no similarity)
-- 5 means moderately similar (some shared elements)
-- 10 means identical or nearly identical
-
-Consider visual elements such as:
-- Overall composition and layout
-- Color scheme and palette
-- Subject matter and objects
-- Style and artistic approach
-- Background and setting
-
-Respond with ONLY a number between 0 and 10 (including decimals like 7.5), and optionally a brief explanation after the number. Example: "7.5 - Similar color palette and composition" or just "8.2"."""
+        from prompt_loader import get_prompt
+        comparison_prompt = get_prompt("similarityComparison")
         
         # Send request to Gemini API with both images
         main.logger.info("Sending images to Gemini API for similarity comparison...")
@@ -859,19 +847,8 @@ async def search_game_hint_endpoint(request: Request, body: SearchGameHintReques
         env_image_base64 = base64.b64encode(env_image_data).decode('utf-8')
         character_image_base64 = base64.b64encode(character_image_data).decode('utf-8')
         
-        # Prepare prompt for hint generation
-        hint_prompt = """Look at these two images. The first image is an environment scene, and the second image is a character.
-
-Your task is to describe where the character (from the second image) is located in the environment scene (first image). 
-
-Provide a clear, helpful hint that describes the location of the character in the environment. Be specific about:
-- The area or region of the scene (e.g., "top left", "center", "bottom right")
-- Nearby objects or landmarks that can help locate the character
-- Any distinctive features or colors in that area
-
-Keep the hint concise (1-2 sentences) and child-friendly. Do not reveal the exact position, but give enough information to guide the search.
-
-Example format: "Look in the upper right area near the colorful flowers" or "Check the bottom left corner where the trees are"."""
+        from prompt_loader import get_prompt
+        hint_prompt = get_prompt("searchGameHint")
         
         # Send request to Gemini API with both images using text model (not pro)
         main.logger.info("Sending images to Gemini API for hint generation...")
