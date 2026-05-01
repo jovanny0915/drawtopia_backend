@@ -260,6 +260,14 @@ def _ensure_prompt_document(supabase, file_key: str, fallback_content: Optional[
     return existing or _seed_prompt_document(supabase, file_key, fallback_content)
 
 
+def _story_identity_filter(story_row: Dict[str, Any]) -> tuple[str, Any]:
+    if story_row.get("uid") is not None:
+        return "uid", story_row.get("uid")
+    if story_row.get("id") is not None:
+        return "id", story_row.get("id")
+    raise HTTPException(status_code=500, detail="Story row has no editable identifier")
+
+
 def _list_prompt_documents(supabase) -> List[Dict[str, Any]]:
     documents: List[Dict[str, Any]] = []
     for file_key in PROMPT_FILES.keys():
@@ -1896,18 +1904,19 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
         if not update_data:
             raise HTTPException(status_code=400, detail="No editable story fields were provided")
 
+        story_filter_column, story_filter_value = _story_identity_filter(story_row)
         (
             supabase
             .table("stories")
             .update(update_data)
-            .eq("id", story_row.get("id"))
+            .eq(story_filter_column, story_filter_value)
             .execute()
         )
         updated_story_response = (
             supabase
             .table("stories")
             .select("*")
-            .eq("id", story_row.get("id"))
+            .eq(story_filter_column, story_filter_value)
             .execute()
         )
         updated_story = updated_story_response.data[0] if updated_story_response.data else {**story_row, **update_data}

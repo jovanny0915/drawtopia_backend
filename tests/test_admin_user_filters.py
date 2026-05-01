@@ -18,6 +18,7 @@ from apis.admin import (
     _matches_date_range,
     _pick_latest_story_job,
     _safe_parse_datetime,
+    _story_identity_filter,
 )
 
 
@@ -152,6 +153,12 @@ def test_pick_latest_story_job_falls_back_to_story_job_id():
     )
 
     assert latest_job == jobs_by_id["999"]
+
+
+def test_story_identity_filter_prefers_uid_for_uid_only_schema():
+    column, value = _story_identity_filter({"uid": "story-uid-1"})
+
+    assert (column, value) == ("uid", "story-uid-1")
 
 
 def test_build_story_pages_returns_all_adventure_page_text_entries():

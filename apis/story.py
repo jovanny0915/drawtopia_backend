@@ -84,6 +84,54 @@ def _require_scene_prompts(scene_prompts: Optional[List[str]], count: int) -> Li
     return prompts
 
 
+def _normalize_enhanced_images(value: Any) -> List[str]:
+    if not value:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return []
+        try:
+            parsed = json.loads(trimmed)
+            raw_items = parsed if isinstance(parsed, list) else [parsed]
+        except Exception:
+            raw_items = trimmed.splitlines()
+    else:
+        raw_items = [value]
+
+    images: List[str] = []
+    seen = set()
+    for item in raw_items:
+        if not isinstance(item, str):
+            continue
+        url = item.strip()
+        if not url:
+            continue
+        clean_url = url.split("?")[0]
+        if clean_url and clean_url not in seen:
+            images.append(clean_url)
+            seen.add(clean_url)
+
+    return images[:3]
+
+
+def _sync_character_enhanced_images_safe(supabase, character_id: Optional[int], enhanced_images: List[str]) -> None:
+    if character_id is None or not enhanced_images:
+        return
+
+    try:
+        supabase.table("characters").update({
+            "enhanced_images": enhanced_images
+        }).eq("id", character_id).execute()
+    except Exception as e:
+        import main
+        main.logger.warning(f"Could not sync enhanced_images to character {character_id}: {e}")
+
+
 @router.post("/api/books/generate")
 @limiter.limit("10/minute")
 async def create_book_generation_job(request: Request, body):
@@ -650,6 +698,7 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
             )
         # If client sent an existing story uid, check if it exists — then update instead of insert
         existing_uid = (body.story_uid or "").strip() or None
+        enhanced_images = _normalize_enhanced_images(body.enhanced_images)
         if existing_uid:
             check = main.supabase.table("stories").select("uid").eq("uid", existing_uid).execute()
             if check.data and len(check.data) > 0:
@@ -665,7 +714,7 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
                     "adventure_type": body.adventure_type,
                     "difficulty": body.difficulty,
                     "original_image_url": body.original_image_url,
-                    "enhanced_images": body.enhanced_images or [],
+                    "enhanced_images": enhanced_images,
                     "story_title": body.story_title,
                     "story_cover": body.story_cover,
                     "cover_design": body.cover_design,
@@ -707,6 +756,7 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
                 except Exception as e:
                     main.logger.warning(f"Could not populate character_for_finding for draft update: {e}")
                 main.supabase.table("stories").update(update_data).eq("uid", existing_uid).execute()
+                _sync_character_enhanced_images_safe(main.supabase, body.character_id, enhanced_images)
                 story_response = main.supabase.table("stories").select("*").eq("uid", existing_uid).execute()
                 story = story_response.data[0] if story_response.data else None
                 if story:
@@ -727,7 +777,7 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
             "adventure_type": body.adventure_type,
             "difficulty": body.difficulty,
             "original_image_url": body.original_image_url,
-            "enhanced_images": body.enhanced_images or [],
+            "enhanced_images": enhanced_images,
             "story_title": body.story_title,
             "story_cover": body.story_cover,
             "cover_design": body.cover_design,
@@ -782,6 +832,7 @@ async def save_story_draft(request: Request, body: SaveStoryDraftRequest):
             story = story_response.data[0]
         else:
             story = response.data[0]
+        _sync_character_enhanced_images_safe(main.supabase, body.character_id, enhanced_images)
         main.logger.info(f"Story draft saved: uid={story.get('uid')}, id={story.get('id')}")
         return story
     except HTTPException as e:
