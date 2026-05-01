@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -5,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apis.admin import (
+    _build_single_scene_image_update,
     _build_story_pages,
     _build_story_owner_summary,
     _build_story_count_by_user,
@@ -247,6 +249,42 @@ def test_listify_urls_normalizes_json_and_blobbed_enhanced_images():
 
     assert urls == ["https://example.supabase.co/a.png", "https://example.supabase.co/b.png"]
     assert blobbed_urls == ["https://example.supabase.co/c.png", "https://example.supabase.co/d.png"]
+
+
+def test_single_scene_image_update_only_replaces_target_page():
+    update_data = _build_single_scene_image_update(
+        story_row={
+            "scene_images": ["page-1.png", "page-2.png", "page-3.png"],
+            "story_content": {
+                "pages": [
+                    {"pageNumber": 1, "text": "Page one", "sceneImage": "page-1.png"},
+                    {"pageNumber": 2, "text": "Page two", "sceneImage": "page-2.png"},
+                    {"pageNumber": 3, "text": "Page three", "sceneImage": "page-3.png"},
+                ],
+            },
+        },
+        page_number=2,
+        image_url="new-page-2.png",
+    )
+
+    story_content = json.loads(update_data["story_content"])
+
+    assert update_data["scene_images"] == ["page-1.png", "new-page-2.png", "page-3.png"]
+    assert [page["sceneImage"] for page in story_content["pages"]] == [
+        "page-1.png",
+        "new-page-2.png",
+        "page-3.png",
+    ]
+
+
+def test_single_scene_image_update_preserves_missing_page_slots():
+    update_data = _build_single_scene_image_update(
+        story_row={"scene_images": ["page-1.png", "page-2.png"]},
+        page_number=5,
+        image_url="new-page-5.png",
+    )
+
+    assert update_data["scene_images"] == ["page-1.png", "page-2.png", "", "", "new-page-5.png"]
 
 
 def test_story_owner_summary_falls_back_to_character_owner():

@@ -126,10 +126,16 @@ class AdminStoryPageTextUpdate(BaseModel):
     audio_url: Optional[str] = None
 
 
+class AdminStorySceneImageUpdate(BaseModel):
+    page_number: int
+    image_url: str
+
+
 class AdminStoryUpdateRequest(BaseModel):
     story_title: Optional[str] = None
     story_pages_text: Optional[List[AdminStoryPageTextUpdate]] = None
     scene_images: Optional[List[str]] = None
+    scene_image_update: Optional[AdminStorySceneImageUpdate] = None
     story_cover: Optional[str] = None
     cover_image: Optional[str] = None
     enhanced_images: Optional[List[str]] = None
@@ -820,10 +826,100 @@ def _extract_story_content_scene_images(story_row: Dict[str, Any]) -> Dict[int, 
 def _extract_story_scene_images_by_page(story_row: Dict[str, Any]) -> Dict[int, List[str]]:
     image_by_page = _extract_story_content_scene_images(story_row)
 
-    for index, image_url in enumerate(_listify_urls(story_row.get("scene_images")), start=1):
-        image_by_page[index] = [image_url]
+    raw_scene_images = story_row.get("scene_images")
+    if isinstance(raw_scene_images, list):
+        for index, image_value in enumerate(raw_scene_images, start=1):
+            image_urls = _listify_urls(image_value)
+            if image_urls:
+                image_by_page[index] = image_urls
+    else:
+        for index, image_url in enumerate(_listify_urls(raw_scene_images), start=1):
+            image_by_page[index] = [image_url]
 
     return image_by_page
+
+
+def _parse_story_content_value(story_content: Any) -> Optional[Any]:
+    if story_content is None:
+        return None
+    if isinstance(story_content, str):
+        trimmed = story_content.strip()
+        if not trimmed:
+            return None
+        try:
+            return json.loads(trimmed)
+        except Exception:
+            return None
+    return story_content
+
+
+def _with_story_content_scene_image(story_content: Any, page_number: int, image_url: str) -> Optional[str]:
+    parsed_content = _parse_story_content_value(story_content)
+    if parsed_content is None:
+        return None
+
+    if isinstance(parsed_content, dict):
+        next_content = dict(parsed_content)
+        pages = next_content.get("pages")
+        if not isinstance(pages, list):
+            return None
+        next_pages = [dict(page) if isinstance(page, dict) else page for page in pages]
+        next_content["pages"] = next_pages
+    elif isinstance(parsed_content, list):
+        next_pages = [dict(page) if isinstance(page, dict) else page for page in parsed_content]
+        next_content = next_pages
+    else:
+        return None
+
+    target_index = page_number - 1
+    target_page: Optional[Dict[str, Any]] = None
+    for index, page in enumerate(next_pages):
+        if not isinstance(page, dict):
+            continue
+        candidate_number = _safe_page_number(
+            page.get("pageNumber") or page.get("page_number") or page.get("sceneNumber") or page.get("scene_number"),
+            index + 1,
+        )
+        if candidate_number == page_number:
+            target_page = page
+            break
+
+    if target_page is None and 0 <= target_index < len(next_pages):
+        page = next_pages[target_index]
+        if isinstance(page, dict):
+            target_page = page
+
+    if target_page is None:
+        return None
+
+    target_page["sceneImage"] = image_url
+    return json.dumps(next_content)
+
+
+def _build_single_scene_image_update(story_row: Dict[str, Any], page_number: int, image_url: str) -> Dict[str, Any]:
+    if page_number <= 0:
+        raise HTTPException(status_code=400, detail="Scene page_number must be greater than zero")
+    cleaned_url = _first_non_empty(image_url)
+    if not cleaned_url:
+        raise HTTPException(status_code=400, detail="Scene image_url is required")
+
+    scene_images = _listify_urls(story_row.get("scene_images"))
+    while len(scene_images) < page_number:
+        scene_images.append("")
+    scene_images[page_number - 1] = cleaned_url
+
+    update_data: Dict[str, Any] = {
+        "scene_images": scene_images,
+    }
+    updated_story_content = _with_story_content_scene_image(
+        story_row.get("story_content"),
+        page_number,
+        cleaned_url,
+    )
+    if updated_story_content is not None:
+        update_data["story_content"] = updated_story_content
+
+    return update_data
 
 
 def _build_story_pages(
@@ -1726,6 +1822,15 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
         if "scene_images" in provided_fields:
             update_data["scene_images"] = body.scene_images or []
 
+        if "scene_image_update" in provided_fields and body.scene_image_update is not None:
+            update_data.update(
+                _build_single_scene_image_update(
+                    story_row=story_row,
+                    page_number=body.scene_image_update.page_number,
+                    image_url=body.scene_image_update.image_url,
+                )
+            )
+
         if "story_cover" in provided_fields:
             update_data["story_cover"] = body.story_cover
 
@@ -1737,12 +1842,14 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
 
         if "story_pages_text" in provided_fields:
             sorted_pages = sorted(body.story_pages_text or [], key=lambda page: page.page_number)
+            scene_images_by_page = _extract_story_scene_images_by_page(story_row)
             update_data["story_content"] = json.dumps({
                 "pages": [
                     {
                         "pageNumber": page.page_number,
                         "text": page.text,
                         "audio_url": page.audio_url,
+                        "sceneImage": (scene_images_by_page.get(page.page_number) or [None])[0],
                     }
                     for page in sorted_pages
                 ]
