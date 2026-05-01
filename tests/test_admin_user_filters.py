@@ -287,6 +287,29 @@ def test_single_scene_image_update_preserves_missing_page_slots():
     assert update_data["scene_images"] == ["page-1.png", "page-2.png", "", "", "new-page-5.png"]
 
 
+def test_single_scene_image_update_replaces_target_image_index():
+    update_data = _build_single_scene_image_update(
+        story_row={
+            "scene_images": ["page-1a.png\npage-1b.png", "page-2.png"],
+            "story_content": {
+                "pages": [
+                    {"pageNumber": 1, "text": "Page one", "sceneImage": ["page-1a.png", "page-1b.png"]},
+                    {"pageNumber": 2, "text": "Page two", "sceneImage": "page-2.png"},
+                ],
+            },
+        },
+        page_number=1,
+        image_url="new-page-1b.png",
+        image_index=1,
+    )
+
+    story_content = json.loads(update_data["story_content"])
+
+    assert update_data["scene_images"] == ["page-1a.png\nnew-page-1b.png", "page-2.png"]
+    assert story_content["pages"][0]["sceneImage"] == ["page-1a.png", "new-page-1b.png"]
+    assert story_content["pages"][1]["sceneImage"] == "page-2.png"
+
+
 def test_story_owner_summary_falls_back_to_character_owner():
     summary = _build_story_owner_summary(
         story_row={"id": 1, "user_id": None, "child_profile_id": None},

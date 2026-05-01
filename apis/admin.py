@@ -129,6 +129,7 @@ class AdminStoryPageTextUpdate(BaseModel):
 class AdminStorySceneImageUpdate(BaseModel):
     page_number: int
     image_url: str
+    image_index: Optional[int] = 0
 
 
 class AdminStoryUpdateRequest(BaseModel):
@@ -853,7 +854,24 @@ def _parse_story_content_value(story_content: Any) -> Optional[Any]:
     return story_content
 
 
-def _with_story_content_scene_image(story_content: Any, page_number: int, image_url: str) -> Optional[str]:
+def _replace_image_url_at_index(existing_urls: List[str], image_url: str, image_index: int) -> List[str]:
+    next_urls = list(existing_urls)
+    while len(next_urls) <= image_index:
+        next_urls.append("")
+    next_urls[image_index] = image_url
+    return next_urls
+
+
+def _serialize_page_image_urls(image_urls: List[str]) -> Optional[str]:
+    cleaned_urls = [url for url in image_urls if isinstance(url, str) and url.strip()]
+    if not cleaned_urls:
+        return None
+    if len(cleaned_urls) == 1:
+        return cleaned_urls[0]
+    return "\n".join(cleaned_urls)
+
+
+def _with_story_content_scene_image(story_content: Any, page_number: int, image_url: str, image_index: int = 0) -> Optional[str]:
     parsed_content = _parse_story_content_value(story_content)
     if parsed_content is None:
         return None
@@ -892,21 +910,39 @@ def _with_story_content_scene_image(story_content: Any, page_number: int, image_
     if target_page is None:
         return None
 
-    target_page["sceneImage"] = image_url
+    image_urls: List[str] = []
+    for key in ("sceneImage", "scene_image", "scene", "pageImage", "page_image", "image_url", "image"):
+        image_urls = _listify_urls(target_page.get(key))
+        if image_urls:
+            break
+    next_image_urls = _replace_image_url_at_index(image_urls, image_url, image_index)
+    target_page["sceneImage"] = next_image_urls if len(next_image_urls) > 1 else next_image_urls[0]
     return json.dumps(next_content)
 
 
-def _build_single_scene_image_update(story_row: Dict[str, Any], page_number: int, image_url: str) -> Dict[str, Any]:
+def _build_single_scene_image_update(
+    story_row: Dict[str, Any],
+    page_number: int,
+    image_url: str,
+    image_index: int = 0,
+) -> Dict[str, Any]:
     if page_number <= 0:
         raise HTTPException(status_code=400, detail="Scene page_number must be greater than zero")
+    if image_index < 0:
+        raise HTTPException(status_code=400, detail="Scene image_index cannot be negative")
     cleaned_url = _first_non_empty(image_url)
     if not cleaned_url:
         raise HTTPException(status_code=400, detail="Scene image_url is required")
 
-    scene_images = _listify_urls(story_row.get("scene_images"))
-    while len(scene_images) < page_number:
-        scene_images.append("")
-    scene_images[page_number - 1] = cleaned_url
+    scene_images_by_page = _extract_story_scene_images_by_page(story_row)
+    current_page_urls = scene_images_by_page.get(page_number) or []
+    scene_images_by_page[page_number] = _replace_image_url_at_index(current_page_urls, cleaned_url, image_index)
+
+    max_page = max(page_number, *(scene_images_by_page.keys() or [0]))
+    scene_images = [
+        _serialize_page_image_urls(scene_images_by_page.get(index) or []) or ""
+        for index in range(1, max_page + 1)
+    ]
 
     update_data: Dict[str, Any] = {
         "scene_images": scene_images,
@@ -915,6 +951,7 @@ def _build_single_scene_image_update(story_row: Dict[str, Any], page_number: int
         story_row.get("story_content"),
         page_number,
         cleaned_url,
+        image_index,
     )
     if updated_story_content is not None:
         update_data["story_content"] = updated_story_content
@@ -1828,6 +1865,7 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
                     story_row=story_row,
                     page_number=body.scene_image_update.page_number,
                     image_url=body.scene_image_update.image_url,
+                    image_index=body.scene_image_update.image_index or 0,
                 )
             )
 
