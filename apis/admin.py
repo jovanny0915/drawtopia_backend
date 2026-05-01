@@ -1880,8 +1880,8 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
         if "story_cover" in provided_fields:
             update_data["story_cover"] = body.story_cover
 
-        if "cover_image" in provided_fields:
-            update_data["cover_image"] = body.cover_image
+        if "cover_image" in provided_fields and "story_cover" not in update_data:
+            update_data["story_cover"] = body.cover_image
 
         if "enhanced_images" in provided_fields:
             update_data["enhanced_images"] = body.enhanced_images or []
@@ -3369,8 +3369,8 @@ async def update_template(
                 )
             else:
                 update_data["story_format"] = raw_sf
-        if "cover_image" in provided_fields:
-            update_data["cover_image"] = body.cover_image
+        if "cover_image" in provided_fields and "story_cover" not in update_data:
+            update_data["story_cover"] = body.cover_image
         if "story_page_images" in provided_fields:
             update_data["story_page_images"] = body.story_page_images
         if "character_for_finding" in provided_fields:
