@@ -1896,16 +1896,21 @@ async def update_admin_story(request: Request, story_id: str, body: AdminStoryUp
         if not update_data:
             raise HTTPException(status_code=400, detail="No editable story fields were provided")
 
-        updated_response = (
+        (
             supabase
             .table("stories")
             .update(update_data)
             .eq("id", story_row.get("id"))
-            .select("*")
-            .single()
             .execute()
         )
-        updated_story = updated_response.data
+        updated_story_response = (
+            supabase
+            .table("stories")
+            .select("*")
+            .eq("id", story_row.get("id"))
+            .execute()
+        )
+        updated_story = updated_story_response.data[0] if updated_story_response.data else {**story_row, **update_data}
 
         if "enhanced_images" in provided_fields and story_row.get("character_id") is not None:
             try:
