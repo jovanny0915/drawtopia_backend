@@ -1525,8 +1525,36 @@ _BARCODE_BLACK_BARS = [
 ]
 
 
+def _format_back_cover_age_group(age_group: Optional[str]) -> str:
+    raw = str(age_group or "").strip()
+    if not raw:
+        return "[Age 7-10]"
+
+    normalized = raw.lower().replace("ages", "").replace("age", "").strip()
+    normalized = normalized.strip("[]() ")
+    if normalized in {"3-5"}:
+        return "[Age 3-6]"
+    if normalized in {"6-7", "8-10"}:
+        return "[Age 7-10]"
+    reading_level_map = {
+        "early_reader": "3-6",
+        "early-reader": "3-6",
+        "kindergarten level": "3-6",
+        "developing_reader": "7-10",
+        "developing-reader": "7-10",
+        "independent_reader": "11-12",
+        "independent-reader": "11-12",
+    }
+    if normalized in reading_level_map:
+        return f"[Age {reading_level_map[normalized]}]"
+    match = re.search(r"(\d+)\s*[-–]\s*(\d+)", normalized)
+    if match:
+        return f"[Age {match.group(1)}-{match.group(2)}]"
+    return f"[Age {raw}]"
+
+
 def _draw_back_cover_barcode(
-    c: canvas.Canvas, width: float, height: float
+    c: canvas.Canvas, width: float, height: float, age_group: Optional[str] = None
 ) -> None:
     """Draw ISBN barcode block at bottom-right of back cover (same as preview)."""
     _ensure_special_page_fonts()
@@ -1574,7 +1602,7 @@ def _draw_back_cover_barcode(
     lw = c.stringWidth(isbn_label, regular_font, 10.5)
     c.drawString(width - margin_right - lw, bottom + box_h + 4, isbn_label)
     # Age label below barcode
-    age_text = "[Age 6-12]"
+    age_text = _format_back_cover_age_group(age_group)
     c.setFillColor(TEXT_WHITE)
     c.setFont(regular_font, 10.5)
     aw = c.stringWidth(age_text, regular_font, 10.5)
@@ -1582,7 +1610,7 @@ def _draw_back_cover_barcode(
 
 
 def _draw_back_cover_text(
-    c: canvas.Canvas, width: float, height: float
+    c: canvas.Canvas, width: float, height: float, age_group: Optional[str] = None
 ) -> None:
     """Draw back cover text overlay (same content and style as preview)."""
     _ensure_special_page_fonts()
@@ -1661,7 +1689,7 @@ def _draw_back_cover_text(
         logger.warning("Back cover logo not found; rendered text-only bottom-left block")
 
     # ISBN label + barcode block at bottom-right (same as preview)
-    _draw_back_cover_barcode(c, width, height)
+    _draw_back_cover_barcode(c, width, height, age_group)
 
 
 def _normalize_scene_urls(scene_urls) -> List[str]:
@@ -1702,6 +1730,7 @@ def create_book_pdf_with_cover(
     dedication_signature: Optional[str] = None,
     story_page_texts: Optional[List[Any]] = None,
     story_world: Optional[str] = None,
+    back_cover_age_group: Optional[str] = None,
 ) -> bool:
     """
     Create a full book PDF. Each image covers the whole page (no margins, scale-to-fill).
@@ -1861,7 +1890,7 @@ def create_book_pdf_with_cover(
             if _draw_full_page_image(c, back_cover_image_url, width, height, "back cover"):
                 page_count += 1
             _draw_back_cover_blur_layers(c, width, height)
-            _draw_back_cover_text(c, width, height)
+            _draw_back_cover_text(c, width, height, back_cover_age_group)
             c.showPage()
 
         c.save()

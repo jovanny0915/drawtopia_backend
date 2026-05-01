@@ -1767,17 +1767,25 @@ async def generate_book_pdf(request: Request, book_id: str):
         character_name = story.get("character_name") or "[CHARACTER_NAME]"
         story_content = story.get("story_content")
         story_page_texts = []
+        back_cover_age_group = _first_non_empty(
+            story.get("age_group"),
+            story.get("reading_level"),
+        )
         
         # Resolve child first name for copyright/dedication/last-words text (same as preview)
         copyright_child_name = "[CHILD_NAME]"
         child_profile_id = story.get("child_profile_id")
         if child_profile_id and main.supabase:
             try:
-                child_resp = main.supabase.table("child_profiles").select("first_name").eq("id", child_profile_id).execute()
-                if child_resp.data and len(child_resp.data) > 0 and child_resp.data[0].get("first_name"):
-                    copyright_child_name = child_resp.data[0]["first_name"]
+                child_resp = main.supabase.table("child_profiles").select("first_name, age_group").eq("id", child_profile_id).execute()
+                if child_resp.data and len(child_resp.data) > 0:
+                    child_profile = child_resp.data[0]
+                    if child_profile.get("first_name"):
+                        copyright_child_name = child_profile["first_name"]
+                    if not back_cover_age_group and child_profile.get("age_group"):
+                        back_cover_age_group = child_profile["age_group"]
             except Exception as e:
-                main.logger.warning(f"Could not fetch child name for PDF: {e}")
+                main.logger.warning(f"Could not fetch child profile details for PDF: {e}")
         
         # Parse dedication into body and signature (same logic as preview)
         import re
@@ -1926,6 +1934,7 @@ async def generate_book_pdf(request: Request, book_id: str):
             dedication_signature=dedication_signature,
             story_page_texts=story_page_texts,
             story_world=story.get("story_world"),
+            back_cover_age_group=back_cover_age_group,
         )
         
         if not success:
