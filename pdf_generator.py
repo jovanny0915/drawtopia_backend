@@ -1600,13 +1600,14 @@ def _draw_back_cover_barcode(
     c.setFillColor(TEXT_WHITE)
     c.setFont(regular_font, 10.5)
     lw = c.stringWidth(isbn_label, regular_font, 10.5)
-    c.drawString(width - margin_right - lw, bottom + box_h + 4, isbn_label)
+    label_center_x = left + box_w / 2
+    c.drawString(label_center_x - lw / 2, bottom + box_h + 4, isbn_label)
     # Age label below barcode
     age_text = _format_back_cover_age_group(age_group)
     c.setFillColor(TEXT_WHITE)
     c.setFont(regular_font, 10.5)
     aw = c.stringWidth(age_text, regular_font, 10.5)
-    c.drawString(width - margin_right - aw, bottom - 12, age_text)
+    c.drawString(label_center_x - aw / 2, bottom - 12, age_text)
 
 
 def _draw_back_cover_text(
