@@ -15,7 +15,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_prompt_documents_updated_at
   ON ai_prompt_documents(updated_at DESC);
 
 COMMENT ON TABLE ai_prompt_documents IS 'Editable AI prompt JSON documents for generation flows.';
-COMMENT ON COLUMN ai_prompt_documents.file_key IS 'Stable prompt document key, e.g. prompt1, prompt_image, prompt_story, backend_prompts.';
+COMMENT ON COLUMN ai_prompt_documents.file_key IS 'Stable prompt document key, e.g. prompt1, prompt_image, prompt_story, story_template, backend_prompts.';
 COMMENT ON COLUMN ai_prompt_documents.content IS 'Full JSON document used as runtime prompt configuration.';
 COMMENT ON COLUMN ai_prompt_documents.version IS 'Incremented every time the prompt document is saved.';
 
