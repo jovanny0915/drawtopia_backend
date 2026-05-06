@@ -3967,12 +3967,16 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
                 **user_data,
                 "created_at": now,
                 "upload_cnt": 10,
+                "subscription_status": "free",
             }
             supabase.table("users").insert(insert_data).execute()
             logger.info(f"New user synced to public.users: {token_user_id}")
         else:
             update_data = {
                 **user_data,
+                "first_name": first_name or existing_user.get("first_name"),
+                "last_name": last_name or existing_user.get("last_name"),
+                "avatar_url": avatar_url or existing_user.get("avatar_url"),
                 "role": existing_user.get("role") or role,
             }
             supabase.table("users").update(update_data).eq("id", existing_user["id"]).execute()
