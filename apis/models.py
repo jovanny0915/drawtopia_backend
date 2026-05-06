@@ -106,6 +106,7 @@ class SaveStoryDraftRequest(BaseModel):
     original_image_url: str
     enhanced_images: Optional[List[str]] = None
     story_title: Optional[str] = None
+    learning_theme: Optional[str] = None
     story_cover: Optional[str] = None
     cover_design: Optional[str] = None
     template_id: Optional[str] = None

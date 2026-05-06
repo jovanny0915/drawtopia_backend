@@ -3511,6 +3511,12 @@ class AuthSyncRequest(BaseModel):
     user_id: str
     email: str
     name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    role: Optional[str] = None
+    auth_provider: Optional[str] = None
+    google_id: Optional[str] = None
 
 
 # --- Passwordless auth (Twilio Verify) ---
@@ -3835,11 +3841,11 @@ async def deliver_gift_endpoint(request: Request):
 @limiter.limit("10/minute")
 async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
     """
-    Sync user data after successful OTP/Magic Link verification.
-    Sends welcome email only for new users (first registration).
-    
-    This endpoint should be called by the frontend after successful
-    Supabase authentication (OTP code entered correctly or magic link clicked).
+    Sync Supabase Auth users into the app's public.users table.
+
+    This endpoint is intentionally server-side because it writes trusted profile
+    fields with the service-role Supabase client. The caller must send the
+    current Supabase access token in the Authorization header.
     """
     try:
         if not supabase:
@@ -3847,25 +3853,146 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
                 status_code=500,
                 detail="Database service not available"
             )
-        
-        user_id = body.user_id
-        email = body.email
-        name = body.name
-        
-        logger.info(f"Auth sync requested for user: {user_id} ({email})")
-        
-        # Check if user exists in our users table
-        user_response = supabase.table("users").select("id").eq("id", user_id).execute()
-        
-        is_new_user = not user_response.data or len(user_response.data) == 0
+
+        authorization = request.headers.get("Authorization")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        access_token = authorization[7:]
+        token_user_id = None
+        auth_user = None
+
+        try:
+            auth_response = supabase.auth.get_user(access_token)
+            auth_user = getattr(auth_response, "user", None)
+            token_user_id = getattr(auth_user, "id", None)
+        except Exception as auth_error:
+            logger.warning("Supabase auth.get_user failed during auth sync: %s", auth_error)
+            token_payload = verify_jwt_token(access_token)
+            token_user_id = token_payload.get("sub") if token_payload else None
+
+        if not token_user_id:
+            raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+        if body.user_id and body.user_id != token_user_id:
+            raise HTTPException(status_code=403, detail="Cannot sync a different user")
+
+        def read_auth_value(value: Any, key: str, default: Any = None) -> Any:
+            if isinstance(value, dict):
+                return value.get(key, default)
+            return getattr(value, key, default)
+
+        auth_metadata = getattr(auth_user, "user_metadata", None) or {}
+        app_metadata = getattr(auth_user, "app_metadata", None) or {}
+        identities = getattr(auth_user, "identities", None) or []
+        google_identity = next(
+            (identity for identity in identities if read_auth_value(identity, "provider") == "google"),
+            None
+        )
+        google_identity_data = read_auth_value(google_identity, "identity_data", {}) or {}
+
+        email = (
+            (body.email or "").strip().lower()
+            or (getattr(auth_user, "email", None) or "").strip().lower()
+            or str(auth_metadata.get("email") or google_identity_data.get("email") or "").strip().lower()
+        )
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+
+        full_name = (
+            (body.name or "").strip()
+            or str(auth_metadata.get("full_name") or auth_metadata.get("name") or "").strip()
+            or str(google_identity_data.get("full_name") or google_identity_data.get("name") or "").strip()
+        )
+        name_parts = full_name.split()
+        first_name = (
+            (body.first_name or "").strip()
+            or str(auth_metadata.get("given_name") or google_identity_data.get("given_name") or "").strip()
+            or (name_parts[0] if name_parts else "")
+        )
+        last_name = (
+            (body.last_name or "").strip()
+            or str(auth_metadata.get("family_name") or google_identity_data.get("family_name") or "").strip()
+            or (" ".join(name_parts[1:]) if len(name_parts) > 1 else "")
+        )
+        avatar_url = (
+            (body.avatar_url or "").strip()
+            or str(auth_metadata.get("avatar_url") or auth_metadata.get("picture") or "").strip()
+            or str(google_identity_data.get("avatar_url") or google_identity_data.get("picture") or "").strip()
+            or None
+        )
+        auth_provider = (
+            (body.auth_provider or "").strip()
+            or str(app_metadata.get("provider") or "").strip()
+            or (read_auth_value(google_identity, "provider") if google_identity else "")
+            or "email"
+        )
+        google_id = (
+            (body.google_id or "").strip()
+            or str(auth_metadata.get("provider_id") or google_identity_data.get("provider_id") or "").strip()
+            or (read_auth_value(google_identity, "id") if google_identity else "")
+            or (token_user_id if auth_provider == "google" else "")
+            or None
+        )
+        role = (body.role or "").strip() or "adult"
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        now = datetime.utcnow().isoformat()
+
+        logger.info(f"Auth sync requested for user: {token_user_id} ({email}, provider={auth_provider})")
+
+        existing_response = supabase.table("users").select("*").eq("id", token_user_id).execute()
+        existing_user = existing_response.data[0] if existing_response.data else None
+
+        if not existing_user:
+            email_response = supabase.table("users").select("*").eq("email", email).execute()
+            existing_user = email_response.data[0] if email_response.data else None
+
+        is_new_user = existing_user is None
         welcome_email_sent = False
+
+        user_data = {
+            "id": token_user_id,
+            "email": email,
+            "first_name": first_name or None,
+            "last_name": last_name or None,
+            "avatar_url": avatar_url,
+            "role": role,
+            "google_id": google_id,
+            "last_login": today,
+            "updated_at": now,
+        }
         
         if is_new_user:
-            # New user - send welcome email
-            logger.info(f"New user detected: {user_id}, sending welcome email")
+            insert_data = {
+                **user_data,
+                "created_at": now,
+                "upload_cnt": 10,
+            }
+            supabase.table("users").insert(insert_data).execute()
+            logger.info(f"New user synced to public.users: {token_user_id}")
+        else:
+            update_data = {
+                **user_data,
+                "role": existing_user.get("role") or role,
+            }
+            supabase.table("users").update(update_data).eq("id", existing_user["id"]).execute()
+            logger.info(f"Existing user synced to public.users: {existing_user['id']} -> {token_user_id}")
+
+        if auth_provider == "google" and is_new_user:
+            try:
+                supabase.table("user_auth_history").insert({
+                    "user_id": token_user_id,
+                    "event_type": "register",
+                    "auth_provider": "google_oauth",
+                }).execute()
+            except Exception as history_error:
+                logger.warning("Failed to write Google auth history: %s", history_error)
+
+        if is_new_user:
+            logger.info(f"New user detected: {token_user_id}, sending welcome email")
             
             # Get user's name for the email
-            customer_name = name if name else None
+            customer_name = full_name or " ".join([first_name, last_name]).strip() or None
             
             if os.getenv("RESEND_API_KEY"):
                 try:
@@ -3885,12 +4012,13 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
             else:
                 logger.warning("Email service not enabled, skipping welcome email")
         else:
-            logger.info(f"Existing user {user_id}, skipping welcome email")
+            logger.info(f"Existing user {token_user_id}, skipping welcome email")
         
         return {
             "success": True,
             "is_new_user": is_new_user,
             "welcome_email_sent": welcome_email_sent,
+            "user": user_data,
             "message": "User synced successfully"
         }
         
