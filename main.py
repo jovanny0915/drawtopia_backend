@@ -3938,6 +3938,14 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
         today = datetime.utcnow().strftime("%Y-%m-%d")
         now = datetime.utcnow().isoformat()
 
+        def is_google_id_type_error(error: Exception) -> bool:
+            error_text = str(error).lower()
+            return (
+                google_id is not None
+                and "22003" in error_text
+                and "bigint" in error_text
+            )
+
         logger.info(f"Auth sync requested for user: {token_user_id} ({email}, provider={auth_provider})")
 
         existing_response = supabase.table("users").select("*").eq("id", token_user_id).execute()
@@ -3969,7 +3977,19 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
                 "upload_cnt": 10,
                 "subscription_status": "free",
             }
-            supabase.table("users").insert(insert_data).execute()
+            try:
+                supabase.table("users").insert(insert_data).execute()
+            except Exception as db_error:
+                if not is_google_id_type_error(db_error):
+                    raise
+                logger.warning(
+                    "users.google_id appears to be BIGINT and cannot store Google provider id %s. "
+                    "Retrying auth sync without google_id; apply the google_id TEXT migration.",
+                    google_id,
+                )
+                insert_data["google_id"] = None
+                user_data["google_id"] = None
+                supabase.table("users").insert(insert_data).execute()
             logger.info(f"New user synced to public.users: {token_user_id}")
         else:
             update_data = {
@@ -3979,7 +3999,19 @@ async def sync_user_after_auth(request: Request, body: AuthSyncRequest):
                 "avatar_url": avatar_url or existing_user.get("avatar_url"),
                 "role": existing_user.get("role") or role,
             }
-            supabase.table("users").update(update_data).eq("id", existing_user["id"]).execute()
+            try:
+                supabase.table("users").update(update_data).eq("id", existing_user["id"]).execute()
+            except Exception as db_error:
+                if not is_google_id_type_error(db_error):
+                    raise
+                logger.warning(
+                    "users.google_id appears to be BIGINT and cannot store Google provider id %s. "
+                    "Retrying auth sync without google_id; apply the google_id TEXT migration.",
+                    google_id,
+                )
+                update_data["google_id"] = existing_user.get("google_id")
+                user_data["google_id"] = existing_user.get("google_id")
+                supabase.table("users").update(update_data).eq("id", existing_user["id"]).execute()
             logger.info(f"Existing user synced to public.users: {existing_user['id']} -> {token_user_id}")
 
         if auth_provider == "google" and is_new_user:
