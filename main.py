@@ -1514,7 +1514,23 @@ def extract_user_from_token(authorization: Optional[str]) -> Optional[str]:
     try:
         # Extract token from "Bearer <token>"
         if authorization.startswith("Bearer "):
-            token = authorization[7:]
+            token = authorization[7:].strip()
+            if not token:
+                return None
+
+            # Supabase access tokens are the normal frontend tokens. Prefer
+            # Supabase Auth validation so this endpoint does not depend solely
+            # on a manually copied SUPABASE_JWT_SECRET.
+            if supabase:
+                try:
+                    auth_user_response = supabase.auth.get_user(token)
+                    auth_user = getattr(auth_user_response, "user", None)
+                    user_id = getattr(auth_user, "id", None)
+                    if user_id:
+                        return user_id
+                except Exception as auth_error:
+                    logger.debug(f"Supabase auth token validation failed: {auth_error}")
+
             payload = verify_jwt_token(token)
             if payload:
                 return payload.get("sub")
