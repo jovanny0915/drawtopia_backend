@@ -99,6 +99,18 @@ if STRIPE_SECRET_KEY:
 else:
     logger.warning("⚠️ STRIPE_SECRET_KEY not found. Stripe payments will be disabled.")
 
+
+def stripe_object_to_dict(value: Any) -> Any:
+    """Normalize Stripe SDK objects so route code can read them like dictionaries."""
+    if value is None or isinstance(value, (str, int, float, bool, dict, list)):
+        return value
+    if hasattr(value, "to_dict_recursive"):
+        return value.to_dict_recursive()
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    return value
+
+
 # Initialize Gemini client
 gemini_client = None
 if GEMINI_API_KEY:
@@ -2600,10 +2612,13 @@ def get_product_metadata_from_checkout_session(session):
     Returns dict with 'credit' (int) if found, None otherwise.
     """
     try:
+        session = stripe_object_to_dict(session)
         session_id = session.get("id")
         if not session_id:
             return None
-        line_items = stripe.checkout.Session.list_line_items(session_id, expand=["data.price.product"])
+        line_items = stripe_object_to_dict(
+            stripe.checkout.Session.list_line_items(session_id, expand=["data.price.product"])
+        )
         data = line_items.get("data", [])
         if not data:
             logger.warning("No line items found in checkout session")
@@ -2613,7 +2628,7 @@ def get_product_metadata_from_checkout_session(session):
         if not product:
             return None
         if isinstance(product, str):
-            product = stripe.Product.retrieve(product)
+            product = stripe_object_to_dict(stripe.Product.retrieve(product))
         product_metadata = product.get("metadata", {})
         credit = product_metadata.get("credit") or product_metadata.get("credits")
         if credit is None:
@@ -2638,6 +2653,7 @@ def get_product_metadata_from_subscription(subscription):
     Returns dict with 'credit' and 'amount' if found, None otherwise.
     """
     try:
+        subscription = stripe_object_to_dict(subscription)
         # Get the first subscription item
         items = subscription.get("items", {}).get("data", [])
         if not items:
@@ -2657,7 +2673,7 @@ def get_product_metadata_from_subscription(subscription):
             return None
         
         # Retrieve the product to get metadata
-        product = stripe.Product.retrieve(product_id)
+        product = stripe_object_to_dict(stripe.Product.retrieve(product_id))
         product_metadata = product.get("metadata", {})
         
         # Extract credit and amount from metadata
@@ -2753,6 +2769,7 @@ def mark_story_as_purchased_for_user(
 async def handle_checkout_completed(session):
     """Handle successful checkout session completion"""
     try:
+        session = stripe_object_to_dict(session)
         mode = session.get("mode")
         metadata = session.get("metadata", {})
         logger.info(f"Checkout completed: {session}")
@@ -2780,7 +2797,7 @@ async def handle_checkout_completed(session):
                 if product_metadata:
                     credits_to_add = product_metadata.get("credit", 0) or 0
                     if credits_to_add > 0:
-                        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+                        customer_email = session.get("customer_email") or (session.get("customer_details") or {}).get("email")
                         target_user_id = None
                         if user_id and str(user_id).strip() and str(user_id) != "unknown":
                             target_user_id = user_id
@@ -2817,7 +2834,7 @@ async def handle_checkout_completed(session):
             # Mark story as purchased in stories table for current user + story
             if story_id and payment_status == "paid" and supabase:
                 try:
-                    customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+                    customer_email = session.get("customer_email") or (session.get("customer_details") or {}).get("email")
                     mark_story_as_purchased_for_user(
                         story_id_raw=story_id,
                         user_id_raw=user_id,
@@ -2834,7 +2851,7 @@ async def handle_checkout_completed(session):
         
         customer_id = session.get("customer")
         subscription_id = session.get("subscription")
-        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
+        customer_email = session.get("customer_email") or (session.get("customer_details") or {}).get("email")
         user_id = metadata.get("user_id")
         price_type = metadata.get("price_type", "monthly")
         
@@ -3418,13 +3435,15 @@ async def get_checkout_session(
         raise HTTPException(status_code=503, detail="Stripe is not configured")
     
     try:
-        # Retrieve the checkout session from Stripe
-        session = stripe.checkout.Session.retrieve(session_id)
+        # Retrieve the checkout session from Stripe. Newer Stripe SDK versions
+        # return StripeObject instances that do not reliably support dict.get().
+        session = stripe_object_to_dict(stripe.checkout.Session.retrieve(session_id))
         
         # Extract relevant information
         mode = session.get("mode")  # "payment" or "subscription"
-        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
-        customer_name = session.get("customer_details", {}).get("name")
+        customer_details = session.get("customer_details") or {}
+        customer_email = session.get("customer_email") or customer_details.get("email")
+        customer_name = customer_details.get("name")
         payment_status = session.get("payment_status")
         
         # Get amount and currency
@@ -3439,7 +3458,7 @@ async def get_checkout_session(
         
         if mode == "subscription" and subscription_id:
             try:
-                subscription = stripe.Subscription.retrieve(subscription_id)
+                subscription = stripe_object_to_dict(stripe.Subscription.retrieve(subscription_id))
                 # Get plan type from price interval
                 if subscription.get("items", {}).get("data"):
                     price = subscription["items"]["data"][0].get("price", {})
@@ -3456,7 +3475,7 @@ async def get_checkout_session(
         # For one-time payments, determine purchase type from metadata
         purchase_type = None
         story_id = None
-        metadata = session.get("metadata", {})
+        metadata = session.get("metadata") or {}
         if mode == "payment":
             purchase_type = metadata.get("purchase_type", "single_story")
             metadata_story_id = metadata.get("story_id")
