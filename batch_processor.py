@@ -926,34 +926,19 @@ class BatchProcessor:
                 # Generate unique filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 unique_id = str(uuid.uuid4())[:8]
-                filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                filename = f"story-audio/story_audio_page{i}_{timestamp}_{unique_id}.mp3"
                 
                 # Upload to Supabase storage
-                # Create 'audio' bucket if it doesn't exist, or use 'images' bucket
-                storage_bucket = "audio"  # You may need to create this bucket in Supabase
+                storage_bucket = "audio"
                 try:
-                    # Try audio bucket first, fallback to images bucket
-                    try:
-                        response = self.supabase.storage.from_(storage_bucket).upload(
-                            filename,
-                            audio_data,
-                            {
-                                'content-type': 'audio/mpeg',
-                                'upsert': 'true'
-                            }
-                        )
-                    except Exception as e:
-                        # If audio bucket doesn't exist, use images bucket
-                        logger.warning(f"Audio bucket not found, using images bucket: {e}")
-                        storage_bucket = "images"
-                        response = self.supabase.storage.from_(storage_bucket).upload(
-                            filename,
-                            audio_data,
-                            {
-                                'content-type': 'audio/mpeg',
-                                'upsert': 'true'
-                            }
-                        )
+                    response = self.supabase.storage.from_(storage_bucket).upload(
+                        filename,
+                        audio_data,
+                        {
+                            'content-type': 'audio/mpeg',
+                            'upsert': 'true'
+                        }
+                    )
                     
                     if hasattr(response, 'full_path') and response.full_path:
                         public_url = self.supabase.storage.from_(storage_bucket).get_public_url(filename)
@@ -1064,7 +1049,7 @@ class BatchProcessor:
             # Upload PDF to Supabase storage
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = str(uuid.uuid4())[:8]
-            filename = f"book_{pdf_type}_{job_id}_{timestamp}_{unique_id}.pdf"
+            filename = f"books/book_{pdf_type}_{job_id}_{timestamp}_{unique_id}.pdf"
             
             logger.info(f"Uploading PDF to Supabase storage: {filename}")
             pdf_url = await self._upload_pdf_to_storage(pdf_bytes, filename)
@@ -1098,29 +1083,15 @@ class BatchProcessor:
                 logger.error("Supabase client not available")
                 return None
             
-            # Upload to 'pdfs' bucket, fallback to 'images' bucket
             storage_bucket = "pdfs"
-            try:
-                response = self.supabase.storage.from_(storage_bucket).upload(
-                    filename,
-                    pdf_bytes,
-                    {
-                        'content-type': 'application/pdf',
-                        'upsert': 'true'
-                    }
-                )
-            except Exception as e:
-                # Fallback to images bucket if pdfs bucket doesn't exist
-                logger.warning(f"PDF bucket not found, using images bucket: {e}")
-                storage_bucket = "images"
-                response = self.supabase.storage.from_(storage_bucket).upload(
-                    filename,
-                    pdf_bytes,
-                    {
-                        'content-type': 'application/pdf',
-                        'upsert': 'true'
-                    }
-                )
+            response = self.supabase.storage.from_(storage_bucket).upload(
+                filename,
+                pdf_bytes,
+                {
+                    'content-type': 'application/pdf',
+                    'upsert': 'true'
+                }
+            )
             
             if hasattr(response, 'full_path') and response.full_path:
                 public_url = self.supabase.storage.from_(storage_bucket).get_public_url(filename)

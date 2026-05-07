@@ -20,7 +20,8 @@ import os
 import logging
 import re
 from uuid import uuid4
-from image_optimizer import TemplateImageOptimizer
+from image_optimizer import ImageOptimizer, TemplateImageOptimizer
+from security_utils import sanitize_storage_path
 from storage_utils import (
     delete_story_images,
     delete_character_images,
@@ -1230,10 +1231,12 @@ def _fetch_user_admin_context(supabase) -> Dict[str, Any]:
 
 async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) -> str:
     """
-    Upload file to Supabase storage with optimization and return public URL.
-    Images are automatically optimized to WebP format before upload.
+    Upload file to Supabase storage with a stable object path and return public URL.
     """
     supabase = get_supabase_client()
+    storage_path = sanitize_storage_path(file_path)
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="Invalid storage path")
     
     try:
         # Read file content
@@ -1242,22 +1245,31 @@ async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) 
         # Optimize image before upload
         logger.info(f"🔧 Optimizing image before upload: {file.filename}")
         try:
-            optimized_content, content_type, extension = image_optimizer.optimize_image(
-                file_content,
-                filename=file.filename
-            )
-            
-            # Update file path to use optimized extension
-            if not file_path.endswith(f".{extension}"):
-                # Replace original extension with optimized extension
-                base_path = file_path.rsplit(".", 1)[0] if "." in file_path else file_path
-                file_path = f"{base_path}.{extension}"
-            
-            logger.info(
-                f"✅ Image optimized: {len(file_content) / 1024:.1f}KB → "
-                f"{len(optimized_content) / 1024:.1f}KB "
-                f"({content_type})"
-            )
+            target_ext = storage_path.rsplit(".", 1)[-1].lower() if "." in storage_path else ""
+            if target_ext in {"jpg", "jpeg"}:
+                optimizer = ImageOptimizer(format="JPEG", quality=90, max_dimension=2048)
+            elif target_ext == "webp":
+                optimizer = image_optimizer
+            else:
+                optimizer = None
+
+            if optimizer is None:
+                optimized_content = file_content
+                content_type = file.content_type or "application/octet-stream"
+                logger.info(
+                    "Keeping original upload bytes for %s so the stored object name stays exact.",
+                    storage_path,
+                )
+            else:
+                optimized_content, content_type, _ = optimizer.optimize_image(
+                    file_content,
+                    filename=file.filename
+                )
+                logger.info(
+                    f"✅ Image optimized: {len(file_content) / 1024:.1f}KB → "
+                    f"{len(optimized_content) / 1024:.1f}KB "
+                    f"({content_type})"
+                )
             
             # Use optimized content
             upload_content = optimized_content
@@ -1271,7 +1283,7 @@ async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) 
         
         # Upload to storage with upsert (overwrites existing file)
         response = supabase.storage.from_(bucket_name).upload(
-            path=file_path,
+            path=storage_path,
             file=upload_content,
             file_options={
                 "content-type": upload_content_type,
@@ -1280,10 +1292,10 @@ async def upload_to_storage(file: UploadFile, bucket_name: str, file_path: str) 
         )
         
         # Get public URL
-        public_url_response = supabase.storage.from_(bucket_name).get_public_url(file_path)
+        public_url_response = supabase.storage.from_(bucket_name).get_public_url(storage_path)
         public_url = public_url_response
         
-        logger.info(f"✅ Uploaded optimized file to storage: {file_path}")
+        logger.info(f"✅ Uploaded file to storage: {bucket_name}/{storage_path}")
         return public_url
         
     except Exception as e:
@@ -2682,7 +2694,7 @@ async def upload_template_image(
 ):
     """
     Upload a single image for a book template field.
-    Images are automatically optimized to WebP format before upload to save storage space.
+    Images are uploaded to a deterministic template path.
     
     Args:
         template_id: ID of the template
@@ -2718,7 +2730,7 @@ async def upload_template_image(
         file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
         file_path = f"book-templates/{template_id}/{field_key}.{file_ext}"
         
-        # Upload to storage (will be optimized to WebP automatically)
+        # Upload to storage using the exact field filename.
         public_url = await upload_to_storage(file, "book-images", file_path)
         
         # Update database
@@ -2735,7 +2747,7 @@ async def upload_template_image(
             "data": response.data[0],
             "image_url": public_url,
             "optimized": True,
-            "format": "WebP"
+            "format": file_ext.lower()
         }
         
     except HTTPException:
@@ -2755,7 +2767,7 @@ async def upload_single_story_page(
 ):
     """
     Upload a single story page image for a book template.
-    Images are automatically optimized to WebP format before upload.
+    Images are uploaded to a deterministic template path.
     This endpoint should be called multiple times (once per image) to avoid 413 errors.
     
     Args:
@@ -2785,7 +2797,7 @@ async def upload_single_story_page(
         file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
         file_path = f"book-templates/{template_id}/story-page-{page_index + 1}.{file_ext}"
         
-        # Upload to storage (with automatic optimization)
+        # Upload to storage using the exact story-page filename.
         public_url = await upload_to_storage(file, "book-images", file_path)
         
         # Insert or update the URL at the specified index
@@ -2818,7 +2830,7 @@ async def upload_single_story_page(
             "page_index": page_index,
             "total_pages": len(existing_urls),
             "optimized": True,
-            "format": "WebP"
+            "format": file_ext.lower()
         }
         
     except HTTPException:
@@ -2894,7 +2906,7 @@ async def upload_main_character_image(
             "image_index": image_index,
             "total_images": len(existing_urls),
             "optimized": True,
-            "format": "WebP"
+            "format": file_ext.lower()
         }
     except HTTPException:
         raise
@@ -3030,7 +3042,7 @@ async def upload_character_for_finding_image(
             "image_index": image_index,
             "total_images": len(existing_urls),
             "optimized": True,
-            "format": "WebP"
+            "format": file_ext.lower()
         }
     except HTTPException:
         raise
@@ -3110,7 +3122,7 @@ async def upload_story_pages(
 ):
     """
     Upload multiple story page images for a book template (DEPRECATED - use upload-story-page instead).
-    All images are automatically optimized to WebP format before upload to save storage space.
+    Images are uploaded to deterministic template paths.
     
     NOTE: This endpoint may cause 413 errors with many/large files. 
     Use POST /upload-story-page endpoint instead to upload one image at a time.
@@ -3145,7 +3157,7 @@ async def upload_story_pages(
             file_ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
             file_path = f"book-templates/{template_id}/story-page-{current_index + 1}.{file_ext}"
             
-            # Upload to storage (with automatic optimization)
+            # Upload to storage using the exact story-page filename.
             public_url = await upload_to_storage(file, "book-images", file_path)
             new_urls.append(public_url)
         
@@ -3167,8 +3179,7 @@ async def upload_story_pages(
             "data": response.data[0],
             "uploaded_count": len(new_urls),
             "total_count": len(all_urls),
-            "optimized": True,
-            "format": "WebP"
+            "optimized": True
         }
         
     except HTTPException:

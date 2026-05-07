@@ -271,7 +271,7 @@ def generate_story_scene_image(
         # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"story_scene_page{page_number}_{timestamp}_{unique_id}.jpg"
+        filename = f"story-scenes/story_scene_page{page_number}_{timestamp}_{unique_id}.jpg"
         
         # Upload to Supabase and get URL
         if supabase_client:

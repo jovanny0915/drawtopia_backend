@@ -197,6 +197,29 @@ def sanitize_filename(filename: str) -> str:
     return filename
 
 
+def sanitize_storage_path(path: str) -> str:
+    """
+    Sanitize a Supabase storage object path while preserving folder segments.
+
+    `sanitize_filename` intentionally strips directories. Storage uploads need
+    stable object routes such as `book-templates/{template_id}/cover.jpg`, so
+    each path segment is sanitized independently instead.
+    """
+    if not path:
+        return ""
+
+    normalized = path.replace("\\", "/")
+    safe_parts = []
+    for part in normalized.split("/"):
+        if not part or part in {".", ".."}:
+            continue
+        safe_part = sanitize_filename(part)
+        if safe_part:
+            safe_parts.append(safe_part)
+
+    return "/".join(safe_parts)
+
+
 def check_sql_injection(text: str) -> bool:
     """
     Basic SQL injection pattern detection

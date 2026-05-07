@@ -239,7 +239,7 @@ async def overlay_back_cover_endpoint(request: Request, body: OverlayBackCoverRe
         optimized = main.optimize_image_to_jpg(result_bytes)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"back_cover_{timestamp}_{unique_id}.jpg"
+        filename = f"generated/back-covers/back_cover_{timestamp}_{unique_id}.jpg"
         storage_result = main.upload_to_supabase(optimized, filename)
         if storage_result.get("uploaded") and storage_result.get("url"):
             return OverlayBackCoverResponse(
@@ -466,7 +466,7 @@ async def overlay_cover_title_endpoint(request: Request, body: OverlayCoverTitle
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"cover_with_title_{timestamp}_{unique_id}.jpg"
+        filename = f"generated/cover-title-overlays/cover_with_title_{timestamp}_{unique_id}.jpg"
         storage_result = main.upload_to_supabase(optimized, filename)
 
         if storage_result.get("uploaded") and storage_result.get("url"):
@@ -554,7 +554,7 @@ async def embed_character_on_background_endpoint(request: Request, body: EmbedCh
         optimized = main.optimize_image_to_jpg(result_bytes)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"embedded_character_{timestamp}_{unique_id}.jpg"
+        filename = f"generated/embedded-characters/embedded_character_{timestamp}_{unique_id}.jpg"
         storage_result = main.upload_to_supabase(optimized, filename)
         
         if storage_result.get("uploaded") and storage_result.get("url"):
@@ -634,7 +634,7 @@ async def edit_image_endpoint(request: Request, body: ImageRequest):
         # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"edited_image_{timestamp}_{unique_id}.jpg"
+        filename = f"generated/edited-images/edited_image_{timestamp}_{unique_id}.jpg"
         
         # Upload optimized image to Supabase storage
         storage_result = main.upload_to_supabase(optimized_image, filename)
@@ -1020,7 +1020,7 @@ async def generate_cover_image_endpoint(request: Request, body: GenerateCoverIma
         # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"cover_image_{timestamp}_{unique_id}.jpg"
+        filename = f"generated/cover-images/cover_image_{timestamp}_{unique_id}.jpg"
         
         # Upload optimized image to Supabase storage
         storage_result = main.upload_to_supabase(optimized_image, filename)

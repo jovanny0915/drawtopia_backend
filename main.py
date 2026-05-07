@@ -38,7 +38,7 @@ import httpx
 # Import security utilities
 from rate_limiter import limiter, rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from security_utils import sanitize_input, sanitize_filename, validate_email, validate_phone, encrypt_data, decrypt_data
+from security_utils import sanitize_input, sanitize_filename, sanitize_storage_path, validate_email, validate_phone, encrypt_data, decrypt_data
 from virus_scanner import get_virus_scanner
 import jwt
 import stripe
@@ -820,19 +820,21 @@ def optimize_image_to_jpg(image_data: bytes, quality: int = 85) -> bytes:
         return image_data
 
 def upload_to_supabase(image_data: bytes, filename: str, use_signed_url: bool = True) -> dict:
-    """Upload image to Supabase storage and return signed or public URL"""
+    """Upload image to Supabase storage and return signed or public URL."""
     if not supabase:
         logger.warning("Supabase client not available, skipping upload")
         return {"uploaded": False, "url": None, "message": "Supabase not configured"}
 
     try:
-        # Sanitize filename
-        filename = sanitize_filename(filename)
-        logger.info(f"Uploading {filename} to Supabase storage bucket '{STORAGE_BUCKET}'")
+        object_path = sanitize_storage_path(filename)
+        if not object_path:
+            return {"uploaded": False, "url": None, "message": "Invalid storage path"}
+
+        logger.info(f"Uploading {object_path} to Supabase storage bucket '{STORAGE_BUCKET}'")
 
         # Scan file for viruses
         scanner = get_virus_scanner()
-        scan_result = scanner.scan_file(image_data, filename)
+        scan_result = scanner.scan_file(image_data, object_path)
         if not scan_result["is_safe"]:
             logger.error(f"❌ File failed security scan: {scan_result['threats_found']}")
             return {
@@ -842,7 +844,7 @@ def upload_to_supabase(image_data: bytes, filename: str, use_signed_url: bool = 
             }
 
         # Pass image_data directly as bytes to Supabase storage
-        response = supabase.storage.from_(STORAGE_BUCKET).upload(filename, image_data, {
+        response = supabase.storage.from_(STORAGE_BUCKET).upload(object_path, image_data, {
             'content-type' : 'image/jpeg',
             'upsert' : 'true'
         })
@@ -853,7 +855,7 @@ def upload_to_supabase(image_data: bytes, filename: str, use_signed_url: bool = 
             if use_signed_url and IS_PRODUCTION:
                 try:
                     signed_url_response = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
-                        filename,
+                        object_path,
                         60 * 60 * 24 * 30  # 30 days in seconds
                     )
                     if signed_url_response and 'signedURL' in signed_url_response:
@@ -861,20 +863,20 @@ def upload_to_supabase(image_data: bytes, filename: str, use_signed_url: bool = 
                         logger.info(f"✅ Successfully uploaded with signed URL (30-day expiry)")
                     else:
                         # Fallback to public URL
-                        url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(filename)
+                        url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(object_path)
                         logger.warning("⚠️ Signed URL failed, using public URL")
                 except Exception as e:
                     logger.warning(f"⚠️ Signed URL creation failed: {e}, using public URL")
-                    url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(filename)
+                    url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(object_path)
             else:
-                url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(filename)
+                url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(object_path)
             
             logger.info(f"✅ Successfully uploaded to Supabase: {url[:100]}...")
 
             return {
                 "uploaded": True,
                 "url": url,
-                "filename": filename,
+                "filename": object_path,
                 "bucket": STORAGE_BUCKET,
                 "message": "Successfully uploaded to Supabase storage",
                 "security_scan": scan_result
@@ -1406,7 +1408,7 @@ def generate_story_scene_image(story_page_text: str, page_number: int, character
         # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"story_scene_page{page_number}_{timestamp}_{unique_id}.jpg"
+        filename = f"story-scenes/story_scene_page{page_number}_{timestamp}_{unique_id}.jpg"
         
         # Upload to Supabase and get URL
         storage_result = upload_to_supabase(optimized_image, filename)

@@ -995,21 +995,14 @@ async def generate_story_full_endpoint(request: Request, body: StoryRequest):
                             continue
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         unique_id = str(uuid.uuid4())[:8]
-                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                        filename = f"story-audio/story_audio_page{i}_{timestamp}_{unique_id}.mp3"
                         storage_bucket = "audio"
                         audio_url = None
                         try:
-                            try:
-                                main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
-                            except Exception:
-                                storage_bucket = "images"
-                                main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
-                            if storage_bucket:
-                                audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
+                            main.supabase.storage.from_(storage_bucket).upload(
+                                filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                            )
+                            audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
                         except Exception as e:
                             main.logger.error(f"Error uploading audio for page {i}: {e}")
                         audio_urls.append(audio_url)
@@ -1192,21 +1185,14 @@ async def generate_story_with_progress_endpoint(request: Request, body: StoryGen
                             continue
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         unique_id = str(uuid.uuid4())[:8]
-                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                        filename = f"story-audio/story_audio_page{i}_{timestamp}_{unique_id}.mp3"
                         storage_bucket = "audio"
                         audio_url = None
                         try:
-                            try:
-                                main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
-                            except Exception:
-                                storage_bucket = "images"
-                                main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
-                            if storage_bucket:
-                                audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
+                            main.supabase.storage.from_(storage_bucket).upload(
+                                filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                            )
+                            audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
                         except Exception as e:
                             main.logger.error(f"Error uploading audio for page {i}: {e}")
                         audio_urls.append(audio_url)
@@ -1551,20 +1537,14 @@ async def generate_story_audio_endpoint(request: Request, body: StoryAudioReques
                         
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         unique_id = str(uuid.uuid4())[:8]
-                        filename = f"story_audio_page{i}_{timestamp}_{unique_id}.mp3"
+                        filename = f"story-audio/story_audio_page{i}_{timestamp}_{unique_id}.mp3"
                         storage_bucket = "audio"
                         audio_url = None
                         
                         try:
-                            try:
-                                response = main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
-                            except Exception:
-                                storage_bucket = "images"
-                                response = main.supabase.storage.from_(storage_bucket).upload(
-                                    filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
-                                )
+                            response = main.supabase.storage.from_(storage_bucket).upload(
+                                filename, audio_data, {"content-type": "audio/mpeg", "upsert": "true"}
+                            )
                             
                             if hasattr(response, "full_path") and response.full_path:
                                 audio_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
@@ -1947,35 +1927,21 @@ async def generate_book_pdf(request: Request, book_id: str):
         # Upload PDF to Supabase storage
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        filename = f"book_{book_id}_{timestamp}_{unique_id}.pdf"
+        filename = f"books/book_{book_id}_{timestamp}_{unique_id}.pdf"
         
         main.logger.info(f"Uploading PDF to Supabase storage: {filename}")
         
-        # Upload to 'pdfs' bucket, fallback to 'images' bucket
         storage_bucket = "pdfs"
         pdf_url = None
         
-        try:
-            response = main.supabase.storage.from_(storage_bucket).upload(
-                filename,
-                pdf_bytes,
-                {
-                    'content-type': 'application/pdf',
-                    'upsert': 'true'
-                }
-            )
-        except Exception as e:
-            # Fallback to images bucket if pdfs bucket doesn't exist
-            main.logger.warning(f"PDF bucket not found, using images bucket: {e}")
-            storage_bucket = "images"
-            response = main.supabase.storage.from_(storage_bucket).upload(
-                filename,
-                pdf_bytes,
-                {
-                    'content-type': 'application/pdf',
-                    'upsert': 'true'
-                }
-            )
+        response = main.supabase.storage.from_(storage_bucket).upload(
+            filename,
+            pdf_bytes,
+            {
+                'content-type': 'application/pdf',
+                'upsert': 'true'
+            }
+        )
         
         if hasattr(response, 'full_path') and response.full_path:
             pdf_url = main.supabase.storage.from_(storage_bucket).get_public_url(filename)
