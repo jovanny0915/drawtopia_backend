@@ -2541,7 +2541,14 @@ async def create_template(request: Request, body: BookTemplateCreate):
         )
     
     try:
-        insert_data = {"name": body.name.strip()}
+        # Generate the primary key client-side so we don't depend on a
+        # database-level DEFAULT (some environments were created without
+        # gen_random_uuid() on book_templates.id, which causes a NOT NULL
+        # violation on insert).
+        insert_data: Dict[str, Any] = {
+            "id": str(uuid4()),
+            "name": body.name.strip(),
+        }
         if body.story_world:
             insert_data["story_world"] = body.story_world
         if requested_story_style:
